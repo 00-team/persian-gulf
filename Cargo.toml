@@ -1,0 +1,10 @@
+[workspace]
+members = ["evergreen", "alzahra"]
+resolver = "2"
+
+[workspace.package]
+# name = "persian-gulf"
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]

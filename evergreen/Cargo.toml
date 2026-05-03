@@ -1,0 +1,8 @@
+[package]
+name = "evergreen"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "evergreen"
+path = "main.rs"

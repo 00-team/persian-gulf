@@ -1,0 +1,8 @@
+[package]
+name = "alzahra"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "alzahra"
+path = "main.rs"
