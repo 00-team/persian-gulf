@@ -4,6 +4,7 @@ use shared::utils::Buffer;
 use shared::{logger, shipment::Shipment, spring::Spring, uid::UniqueId};
 use std::collections::HashMap;
 use std::io::Cursor;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -16,6 +17,49 @@ mod socks;
 async fn main() -> std::io::Result<()> {
     log::set_logger(&logger::MasterLogger).expect("could not init logger");
     log::set_max_level(log::LevelFilter::Trace);
+
+    let b64 = base64::engine::GeneralPurpose::new(
+        &base64::alphabet::STANDARD,
+        base64::engine::GeneralPurposeConfig::new()
+            .with_encode_padding(false)
+            .with_decode_padding_mode(
+                base64::engine::DecodePaddingMode::Indifferent,
+            ),
+    );
+
+    let client = reqwest::Client::builder()
+        .resolve(
+            "script.google.com",
+            (Ipv4Addr::new(216, 239, 38, 120), 443).into(),
+        )
+        .resolve(
+            "script.googleusercontent.com",
+            (Ipv4Addr::new(216, 239, 38, 120), 443).into(),
+        )
+        .build()
+        .unwrap();
+
+    let res = client
+        .post(concat!(
+            "https://script.google.com/macros/s/",
+            "AKfycbyQoU6ub9jNPnfYqpQksFBHdjVw8MCA_",
+            "spTAb8FgLgNNRoKvzG7MEcA0y2Xfe1dM3mI",
+            "/dev"
+        ))
+        .query(&[
+            ("t", "http://94.183.183.223:9920/api/proxy/bin-batch/"),
+            ("a", "F1ilebxCY4vqDYkisjbOgdOf9Sw"),
+        ])
+        .body("some text")
+        .send()
+        .await;
+
+    log::info!("res: {res:#?}");
+    if let Ok(res) = res {
+        log::info!("res: {:#?}", res.text().await);
+    }
+
+    return Ok(());
 
     let listener = TcpListener::bind("127.0.0.1:6007").await?;
     log::info!("socks on: 127.0.0.1:6007");
@@ -62,6 +106,9 @@ async fn main() -> std::io::Result<()> {
 
 async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
     let ship_uid = UniqueId::new(77);
+
+    // auth = F1ilebxCY4vqDYkisjbOgdOf9Sw
+    // AKfycbyQoU6ub9jNPnfYqpQksFBHdjVw8MCA_spTAb8FgLgNNRoKvzG7MEcA0y2Xfe1dM3mI
     // let ship_sleep = std::time::Duration::from_secs(1);
     let client = reqwest::Client::builder().build().unwrap();
     const SHIP_URL: &str = "http://localhost:7707/api/proxy/bin-batch/";

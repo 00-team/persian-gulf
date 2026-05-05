@@ -13,5 +13,6 @@ toml.workspace = true
 serde.workspace = true
 shared.workspace = true
 tokio.workspace = true
+base64.workspace = true
 
 reqwest = { version = "0.12.15", features = ["json"] }

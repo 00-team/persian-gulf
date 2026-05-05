@@ -1,9 +1,7 @@
-use crate::ActiveShips;
 use crate::models::Horp;
-use actix_web::{
-    HttpResponse, Scope, post,
-    web::{self, Data},
-};
+use crate::{ActiveShips, config::Config};
+use actix_web::{HttpResponse, Scope, post, web::Data};
+use base64::Engine;
 use shared::{shipment::SpringTank, utils::Buffer};
 use shared::{
     shipment::{BinDencode, Shipment},
@@ -13,9 +11,16 @@ use std::sync::atomic::Ordering;
 use std::{collections::HashMap, io::Cursor};
 
 #[post("/bin-batch/")]
-async fn r_bin_batch(payload: web::Bytes, ships: Data<ActiveShips>) -> Horp {
-    let mut reader = Cursor::new(payload);
-    let shipment = Shipment::read(&mut reader).await?;
+async fn r_bin_batch(body: String, ships: Data<ActiveShips>) -> Horp {
+    let conf = Config::get();
+    let Ok(data) = conf.b64.decode(body) else {
+        return crate::err!(BadRequest, "invalid base64");
+    };
+
+    let mut reader = Cursor::new(data);
+    let Ok(shipment) = Shipment::read(&mut reader).await else {
+        return crate::err!(BadRequest, "invalid shipment");
+    };
 
     let ship = ships.ship_get(shipment.ship_uid).await;
     let mut ship = ship.lock().await;

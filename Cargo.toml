@@ -13,5 +13,7 @@ toml = "0.9.10"
 rand = "0.9.2"
 tokio = { version = "1.40.0", features = ["full"] }
 serde = { version = "1.0.210", features = ["derive"] }
+base64 = "0.22.1"
+
 
 shared = { path = "./shared" }

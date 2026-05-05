@@ -38,7 +38,9 @@ mod tom {
 
 #[derive(Debug)]
 /// `Al-Zahra` Config
-pub struct Config {}
+pub struct Config {
+    pub b64: base64::engine::GeneralPurpose,
+}
 
 impl Config {
     #![allow(clippy::inconsistent_digit_grouping)]
@@ -51,9 +53,18 @@ impl Config {
     }
 
     fn init() -> Self {
-        let ct = tom::get();
+        let _ = tom::get();
 
-        Self {}
+        Self {
+            b64: base64::engine::GeneralPurpose::new(
+                &base64::alphabet::STANDARD,
+                base64::engine::GeneralPurposeConfig::new()
+                    .with_encode_padding(false)
+                    .with_decode_padding_mode(
+                        base64::engine::DecodePaddingMode::Indifferent,
+                    ),
+            ),
+        }
     }
 
     pub fn get() -> &'static Self {
