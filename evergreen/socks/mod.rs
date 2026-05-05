@@ -1,5 +1,12 @@
-use std::io::{Read, Write};
-use std::net::TcpStream;
+use shared::shipment::BinDencode;
+use shared::uid::UniqueId;
+use shared::utils::{Buffer, SocksHost};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::sync::mpsc;
 
 #[derive(Debug)]
 pub enum EverError {
@@ -19,24 +26,25 @@ impl From<std::io::Error> for EverError {
 }
 
 #[derive(Debug)]
-pub enum Host {
-    Ipv4([u8; 4]),
-    Ipv6([u8; 16]),
-    Domain { domain: [u8; 255], len: u8 },
+pub struct SocksChannelRunning {
+    pub id: UniqueId,
+    pub host: SocksHost,
+    pub port: u16,
+    pub sx: mpsc::Sender<Buffer>,
+    pub rx: mpsc::Receiver<Buffer>,
+    pub ended: Arc<AtomicBool>,
 }
 
-pub struct SocksClient {
+pub struct SocksChannelCold {
     s: TcpStream,
-    pub host: Host,
+    index: u64,
+    pub host: SocksHost,
     pub port: u16,
 }
 
-impl SocksClient {
+impl SocksChannelCold {
     const SOCKS_VERSION: u8 = 0x05;
     const CMD_CONNECT: u8 = 0x01;
-    const ATYP_IPV4: u8 = 0x01;
-    const ATYP_DOMAIN: u8 = 0x03;
-    const ATYP_IPV6: u8 = 0x04;
 
     const METHOD_NO_AUTH: u8 = 0x00;
     const METHOD_USER_PASS: u8 = 0x02;
@@ -45,37 +53,57 @@ impl SocksClient {
     const AUTH_SUCCESS: u8 = 0x00;
     const AUTH_FAILURE: u8 = 0x01;
 
-    pub fn init(stream: TcpStream) -> Result<Self, EverError> {
-        let mut sc = Self { s: stream, host: Host::Ipv4([0; 4]), port: 0 };
+    pub async fn init(
+        stream: TcpStream, index: u64,
+    ) -> Result<Self, EverError> {
+        let mut sc = Self {
+            s: stream,
+            index,
+            host: SocksHost::Ipv4([0; 4]),
+            port: 0,
+            // id,
+            // input: Default::default(),
+            // output: Default::default(),
+            // input_length: Default::default(),
+        };
 
-        sc.handshake()?;
-        sc.target()?;
+        sc.handshake().await?;
+        sc.target().await?;
 
         Ok(sc)
     }
 
-    fn handshake(&mut self) -> Result<(), EverError> {
+    async fn handshake(&mut self) -> Result<(), EverError> {
         // socks version , number of methods
         let mut header = [0u8; 2];
-        self.s.read_exact(&mut header)?;
+        self.s.read_exact(&mut header).await?;
         if header[0] != Self::SOCKS_VERSION {
             return Err(EverError::SocksVersionMismatch);
         }
 
         let nmethods = header[1] as usize;
         let mut methods = [0u8; 255];
-        self.s.read_exact(&mut methods[..nmethods])?;
+        self.s.read_exact(&mut methods[..nmethods]).await?;
+
+        if methods.contains(&Self::METHOD_NO_AUTH) {
+            self.s
+                .write_all(&[Self::SOCKS_VERSION, Self::METHOD_NO_AUTH])
+                .await?;
+            return Ok(());
+        }
 
         if !methods.contains(&Self::METHOD_USER_PASS) {
-            self.s.write_all(&[Self::SOCKS_VERSION, 0xFF])?;
+            self.s.write_all(&[Self::SOCKS_VERSION, 0xFF]).await?;
             return Err(EverError::SocksNoAcceptableMethod);
         }
 
-        self.s.write_all(&[Self::SOCKS_VERSION, Self::METHOD_USER_PASS])?;
+        self.s
+            .write_all(&[Self::SOCKS_VERSION, Self::METHOD_USER_PASS])
+            .await?;
 
         // auth method, username len
         let mut auth_header = [0u8; 2];
-        self.s.read_exact(&mut auth_header)?;
+        self.s.read_exact(&mut auth_header).await?;
 
         if auth_header[0] != Self::AUTH_VERSION {
             return Err(EverError::SocksAuthRequired);
@@ -83,22 +111,22 @@ impl SocksClient {
 
         let ulen = auth_header[1] as usize;
         let mut username = [0u8; 255];
-        self.s.read_exact(&mut username[..ulen])?;
+        self.s.read_exact(&mut username[..ulen]).await?;
 
         let mut plen_buf = [0u8; 1];
-        self.s.read_exact(&mut plen_buf)?;
+        self.s.read_exact(&mut plen_buf).await?;
         let plen = plen_buf[0] as usize;
 
         let mut password = [0u8; 255];
-        self.s.read_exact(&mut password[..plen])?;
+        self.s.read_exact(&mut password[..plen]).await?;
 
-        println!(
+        log::debug!(
             "user: {:?} | pass: {:?}",
             str::from_utf8(&username[..ulen]),
             str::from_utf8(&password[..plen])
         );
 
-        self.s.write_all(&[Self::AUTH_VERSION, Self::AUTH_SUCCESS])?;
+        self.s.write_all(&[Self::AUTH_VERSION, Self::AUTH_SUCCESS]).await?;
         // TODO: handle userpass correctly
         // if user_ok && pass_ok {
         // } else {
@@ -112,10 +140,10 @@ impl SocksClient {
         Ok(())
     }
 
-    fn target(&mut self) -> Result<(), EverError> {
+    async fn target(&mut self) -> Result<(), EverError> {
         // socks version, command, RSV, ATYP
-        let mut req_header = [0u8; 4];
-        self.s.read_exact(&mut req_header)?;
+        let mut req_header = [0u8; 3];
+        self.s.read_exact(&mut req_header).await?;
         if req_header[0] != Self::SOCKS_VERSION
             || req_header[1] != Self::CMD_CONNECT
             || req_header[2] != 0
@@ -123,34 +151,36 @@ impl SocksClient {
             return Err(EverError::SocksInvalidConnect);
         }
 
-        let atyp = req_header[3];
-        let host = match atyp {
-            Self::ATYP_IPV4 => {
-                let mut ip = [0u8; 4];
-                self.s.read_exact(&mut ip)?;
-                Host::Ipv4(ip)
-            }
-            Self::ATYP_DOMAIN => {
-                let mut len_buf = [0u8; 1];
-                self.s.read_exact(&mut len_buf)?;
-                let len = len_buf[0];
-                let mut domain = [0u8; 255];
-                self.s.read_exact(&mut domain[..len as usize])?;
-                println!("domain: {:?}", str::from_utf8(&domain));
-                Host::Domain { domain, len }
-            }
-            Self::ATYP_IPV6 => {
-                let mut ip = [0u8; 16];
-                self.s.read_exact(&mut ip)?;
-                Host::Ipv6(ip)
-            }
-            _ => {
-                return Err(EverError::SocksUnsupportedAddress);
-            }
-        };
+        let host = SocksHost::read(&mut self.s).await?;
+
+        // let atyp = req_header[3];
+        // let host = match atyp {
+        //     Self::ATYP_IPV4 => {
+        //         let mut ip = [0u8; 4];
+        //         self.s.read_exact(&mut ip)?;
+        //         SocksHost::Ipv4(ip)
+        //     }
+        //     Self::ATYP_DOMAIN => {
+        //         let mut len_buf = [0u8; 1];
+        //         self.s.read_exact(&mut len_buf)?;
+        //         let len = len_buf[0];
+        //         let mut domain = [0u8; 255];
+        //         self.s.read_exact(&mut domain[..len as usize])?;
+        //         log::info!("domain: {:?}", str::from_utf8(&domain));
+        //         SocksHost::Domain { domain, len }
+        //     }
+        //     Self::ATYP_IPV6 => {
+        //         let mut ip = [0u8; 16];
+        //         self.s.read_exact(&mut ip)?;
+        //         SocksHost::Ipv6(ip)
+        //     }
+        //     _ => {
+        //         return Err(EverError::SocksUnsupportedAddress);
+        //     }
+        // };
 
         let mut port_buf = [0u8; 2];
-        self.s.read_exact(&mut port_buf)?;
+        self.s.read_exact(&mut port_buf).await?;
         let port = u16::from_be_bytes(port_buf);
 
         self.host = host;
@@ -184,20 +214,141 @@ impl SocksClient {
         // };
 
         // assume Success reply
-        self.s.write_all(&[
-            Self::SOCKS_VERSION,
-            0x00, // succeeded
-            0x00,
-            Self::ATYP_IPV4,
-            0,
-            0,
-            0,
-            0, // BND.ADDR 0.0.0.0
-            0,
-            0, // BND.PORT 0
-        ])?;
+        self.s
+            .write_all(&[
+                Self::SOCKS_VERSION,
+                0x00, // succeeded
+                0x00,
+                SocksHost::ATYP_IPV4,
+                0,
+                0,
+                0,
+                0, // BND.ADDR 0.0.0.0
+                0,
+                0, // BND.PORT 0
+            ])
+            .await?;
 
         Ok(())
+    }
+
+    pub fn run(self) -> SocksChannelRunning {
+        // let input_base = Arc::new(Mutex::new(Vec::with_capacity(100 * 1024)));
+        // let output_base = Arc::new(Mutex::new(Vec::with_capacity(100 * 1024)));
+        // let input_len_base = Arc::new(AtomicUsize::new(0));
+        // let output_len_base = Arc::new(AtomicUsize::new(0));
+        let ended = Arc::new(AtomicBool::new(false));
+
+        let (sx_alzahra, rx_alzahra) = mpsc::channel::<Buffer>(1024);
+        let (sx_channel, rx_channel) = mpsc::channel::<Buffer>(1024);
+
+        let runner = SocksChannelRunning {
+            id: UniqueId::new(self.index),
+            host: self.host,
+            port: self.port,
+            sx: sx_channel,
+            rx: rx_alzahra,
+            ended: ended.clone(),
+        };
+
+        let (tcp_read, tcp_write) = self.s.into_split();
+        tokio::spawn(Self::read_loop(tcp_read, ended.clone(), sx_alzahra));
+        tokio::spawn(Self::write_loop(tcp_write, rx_channel));
+
+        // let mut stream = self.s;
+        // let output = output_base.clone();
+        // let output_len = output_len_base.clone();
+        // let ended = ended_base.clone();
+        // std::thread::spawn(move || {
+        //     // if stream.set_nonblocking(true).is_err() {
+        //     //     ended.store(false, Ordering::SeqCst);
+        //     // }
+        //     while !ended.load(Ordering::Relaxed) {
+        //         if output_len.load(Ordering::Relaxed) == 0 {
+        //             std::thread::sleep(std::time::Duration::from_secs(1));
+        //             continue;
+        //         }
+        //         let out_buf = {
+        //             let mut out = output.lock().unwrap();
+        //             let out_buf = out.clone();
+        //             out.clear();
+        //             output_len.store(0, Ordering::SeqCst);
+        //             out_buf
+        //         };
+        //
+        //         if stream.write_all(&out_buf).is_err() {
+        //             ended.store(true, Ordering::SeqCst);
+        //             log::info!("writer error");
+        //             return;
+        //         }
+        //     }
+        //
+        //     log::warn!("writer end");
+        // });
+        //
+
+        runner
+    }
+
+    async fn read_loop(
+        mut stream: OwnedReadHalf, ended: Arc<AtomicBool>,
+        sx_alzahra: mpsc::Sender<Buffer>,
+    ) {
+        // if stream.set_nonblocking(true).is_err() {
+        //     log::error!("reader thread: non blocking error");
+        //     ended.store(true, Ordering::SeqCst);
+        // }
+        let mut buf = [0u8; 1024];
+
+        loop {
+            match stream.read(&mut buf).await {
+                Ok(0) => {
+                    log::warn!("eof");
+                    break;
+                }
+                Ok(n) => {
+                    log::info!("must send buf[..{n}]");
+                    sx_alzahra.send(Buffer::new(&buf[..n])).await;
+                    // buf_len = 0;
+                }
+                // Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                //     // || e.kind() == ErrorKind::TimedOut =>
+                //     // if e.kind() == ErrorKind::T
+                //     // log::warn!("err: {e:?}");
+                //     // sx_alzahra.send(buf.clone()).unwrap();
+                //     // buf.clear();
+                //
+                //     // let mut inp = input.lock().unwrap();
+                //     // inp.extend(&buf);
+                //     // input_len.store(inp.len(), Ordering::Relaxed);
+                //     // buf.clear();
+                //     // No data right now. If the window has expired, flush.
+                //     // if start.elapsed() >= window {
+                //     //     break; // exit gather loop, flush below
+                //     // }
+                //     // Otherwise just loop back and try another read.
+                //     // The next read will again block at most `read_timeout`.
+                // }
+                Err(e) => {
+                    log::error!("read error: {e:#?}");
+                    break;
+                }
+            };
+
+            // std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        log::error!("socks channel ended");
+        ended.store(true, Ordering::SeqCst);
+    }
+
+    async fn write_loop(
+        mut stream: OwnedWriteHalf, mut rx_channel: mpsc::Receiver<Buffer>,
+    ) {
+        loop {
+            let Some(data) = rx_channel.recv().await else { return };
+            stream.write_all(data.read()).await;
+        }
     }
 }
 

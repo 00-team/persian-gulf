@@ -1,0 +1,13 @@
+[package]
+name = "shared"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "shared"
+path = "lib.rs"
+
+[dependencies]
+log.workspace = true
+rand.workspace = true
+tokio.workspace = true
