@@ -1,16 +1,28 @@
-use std::collections::HashMap;
-use tokio::sync::Mutex;
+use crate::config::Config;
+use actix_web::web::Data;
 use actix_web::{
     App, HttpServer, middleware as mw,
-    web::{ServiceConfig, scope},
+    web::{ServiceConfig, scope, self},
 };
+use shared::shipment::{Shipment, SpringTank};
+use shared::spring::Spring;
+use std::sync::atomic::Ordering;
+use std::{
+    collections::HashMap,
+    sync::{Arc, atomic::AtomicBool},
+};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 
 mod api;
 mod config;
 mod models;
 
 pub use models::{AppErr, ErrorCode};
-use shared::uid::UniqueId;
+use shared::{uid::UniqueId, utils::Buffer};
 
 fn config_app(app: &mut ServiceConfig) {
     app.service(scope("/api").service(api::proxy::router()));
@@ -20,27 +32,134 @@ fn config_app(app: &mut ServiceConfig) {
     // }))
 }
 
-struct Ship {
+#[derive(Debug, Default)]
+pub struct Ship {
+    pub springs: HashMap<UniqueId, Spring>,
+    pub latest_order: u64,
+    pub response_order: u64,
+    pub queued_shipments: Vec<Shipment>,
 }
 
-struct ActiveChannels {
-    ships: HashMap<UniqueId, Mutex<Ship>>
+impl Ship {
+    pub async fn new_channel(&mut self, sch: &SpringTank) {
+        let ended = Arc::new(AtomicBool::new(false));
+
+        let (sx_ship, rx_ship) = mpsc::channel::<Buffer>(1024);
+        let (sx_channel, rx_channel) = mpsc::channel::<Buffer>(1024);
+
+        let runner = Spring {
+            id: sch.id,
+            host: sch.host.clone(),
+            port: sch.port,
+            sx: sx_channel,
+            rx: rx_ship,
+            ended: ended.clone(),
+        };
+
+        self.springs.insert(sch.id, runner);
+
+        tokio::spawn(Self::run_channel(
+            sch.clone(),
+            sx_ship,
+            rx_channel,
+            ended,
+        ));
+    }
+
+    async fn run_channel(
+        sch: SpringTank, sx_ship: mpsc::Sender<Buffer>,
+        rx_channel: mpsc::Receiver<Buffer>, ended: Arc<AtomicBool>,
+    ) {
+        let addr = sch.host.to_addr(sch.port);
+        let mut s = match TcpStream::connect(&addr).await {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("connect to {addr} failed: {e:?}");
+                ended.store(true, Ordering::SeqCst);
+                return;
+            }
+        };
+        if let Err(e) = s.write_all(&sch.data).await {
+            log::warn!("sending data to {addr} failed: {e:?}");
+            ended.store(true, Ordering::SeqCst);
+            return;
+        }
+
+        let (tcp_read, tcp_write) = s.into_split();
+        tokio::spawn(Self::read_loop(tcp_read, sx_ship, ended.clone()));
+        tokio::spawn(Self::write_loop(tcp_write, rx_channel, ended.clone()));
+    }
+
+    async fn read_loop(
+        mut stream: OwnedReadHalf, sx_ship: mpsc::Sender<Buffer>,
+        ended: Arc<AtomicBool>,
+    ) {
+        let mut buf = [0u8; Buffer::LEN];
+
+        while !ended.load(Ordering::Relaxed) {
+            match stream.read(&mut buf).await {
+                Ok(0) => {
+                    break;
+                }
+                Ok(n) => {
+                    let _ = sx_ship.send(Buffer::new(&buf[..n])).await;
+                    // buf_len = 0;
+                }
+                Err(e) => {
+                    log::error!("read error: {e:#?}");
+                    break;
+                }
+            };
+        }
+
+        ended.store(true, Ordering::SeqCst);
+    }
+
+    async fn write_loop(
+        mut stream: OwnedWriteHalf, mut rx_channel: mpsc::Receiver<Buffer>,
+        ended: Arc<AtomicBool>,
+    ) {
+        while !ended.load(Ordering::Relaxed) {
+            let Some(data) = rx_channel.recv().await else { return };
+            stream.write_all(data.read()).await.unwrap();
+        }
+    }
 }
 
+#[derive(Debug, Default)]
+pub struct ActiveShips {
+    pub ships: Mutex<HashMap<UniqueId, Arc<Mutex<Ship>>>>,
+}
+
+impl ActiveShips {
+    pub async fn ship_get(&self, id: UniqueId) -> Arc<Mutex<Ship>> {
+        let mut ss = self.ships.lock().await;
+        if let Some(s) = ss.get(&id) {
+            return s.clone();
+        }
+
+        let s = Arc::new(Mutex::new(Ship::default()));
+        ss.insert(id, s.clone());
+        s
+    }
+}
 
 #[cfg(unix)]
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    use crate::config::Config;
-
     log::set_logger(&shared::logger::MasterLogger).expect("logger");
     log::set_max_level(log::LevelFilter::Debug);
 
     // let conf = Config::get();
     Config::create_dirs()?;
+    let ships = Data::new(ActiveShips::default());
 
     let server = HttpServer::new(move || {
-        App::new().wrap(mw::Logger::new("%s %r %Ts")).configure(config_app)
+        App::new()
+            .app_data(ships.clone())
+            .app_data(web::PayloadConfig::new(100 * 1024 * 1024))
+            .wrap(mw::Logger::new("%s %r %Ts"))
+            .configure(config_app)
         // .wrap(mw::from_fn(bridge::headx))
     });
 

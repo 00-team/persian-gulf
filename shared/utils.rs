@@ -11,6 +11,34 @@ impl SocksHost {
     pub const ATYP_IPV4: u8 = 0x01;
     pub const ATYP_DOMAIN: u8 = 0x03;
     pub const ATYP_IPV6: u8 = 0x04;
+
+    pub fn to_addr(&self, port: u16) -> String {
+        match self {
+            Self::Ipv4(ip) => {
+                format!("{}.{}.{}.{}:{port}", ip[0], ip[1], ip[2], ip[3])
+            }
+            Self::Domain(dom) => format!("{dom}:{port}"),
+            Self::Ipv6(ip) => format!(
+                "{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{port}",
+                ip[0],
+                ip[1],
+                ip[2],
+                ip[3],
+                ip[4],
+                ip[5],
+                ip[6],
+                ip[7],
+                ip[8],
+                ip[9],
+                ip[10],
+                ip[11],
+                ip[12],
+                ip[13],
+                ip[14],
+                ip[15]
+            ),
+        }
+    }
 }
 
 impl BinDencode for SocksHost {
@@ -67,18 +95,22 @@ impl BinDencode for SocksHost {
     }
 }
 
+const _BUF_LEN: usize = 8 * 1024;
+
 pub struct Buffer {
-    data: [u8; 1024],
+    data: [u8; _BUF_LEN],
     len: usize,
 }
 
 impl Buffer {
+    pub const LEN: usize = _BUF_LEN;
+
     pub const fn len(&self) -> usize {
         self.len
     }
 
     pub const fn is_full(&self) -> bool {
-        self.len == 1024
+        self.len == Self::LEN
     }
 
     pub fn read(&self) -> &[u8] {
@@ -86,8 +118,12 @@ impl Buffer {
     }
 
     pub fn new(value: &[u8]) -> Self {
-        let mut data = [0; 1024];
+        let mut data = [0; Self::LEN];
         data[..value.len()].copy_from_slice(value);
         Self { len: value.len(), data }
+    }
+
+    pub fn from_data(data: &[u8]) -> impl Iterator<Item = Buffer> + '_ {
+        data.chunks(Self::LEN).map(|chunk| Buffer::new(chunk))
     }
 }

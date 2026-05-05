@@ -42,11 +42,20 @@ pub trait BinDencode: Sized {
 pub struct Shipment {
     pub ship_uid: UniqueId,
     pub order: u64,
-    pub channels: Vec<ShipmentChannel>,
+    pub tanks: Vec<SpringTank>,
     /*
     <evergreen unique id> - <request id: u64> - <number of channels: u16>
     <channel id> - <host> - <port> - <data len: u32> - <data>
     */
+}
+
+impl Shipment {
+    pub async fn to_bytes(&self) -> Vec<u8> {
+        let buf = Vec::with_capacity(1 * 1024 * 1024);
+        let mut cursor = std::io::Cursor::new(buf);
+        self.write(&mut cursor).await.unwrap();
+        cursor.into_inner()
+    }
 }
 
 impl BinDencode for Shipment {
@@ -56,10 +65,10 @@ impl BinDencode for Shipment {
         let ch_len = r.read_u16_le().await? as usize;
         let mut channels = Vec::with_capacity(ch_len);
         for _ in 0..ch_len {
-            channels.push(ShipmentChannel::read(r).await?);
+            channels.push(SpringTank::read(r).await?);
         }
 
-        Ok(Self { ship_uid, order, channels })
+        Ok(Self { ship_uid, order, tanks: channels })
     }
 
     async fn write<W: AsyncWriteExt + Unpin>(
@@ -67,9 +76,9 @@ impl BinDencode for Shipment {
     ) -> tokio::io::Result<()> {
         self.ship_uid.write(w).await?;
         w.write_u64_le(self.order).await?;
-        w.write_u16_le(self.channels.len() as u16).await?;
+        w.write_u16_le(self.tanks.len() as u16).await?;
 
-        for ch in self.channels.iter() {
+        for ch in self.tanks.iter() {
             ch.write(w).await?;
         }
 
@@ -77,19 +86,21 @@ impl BinDencode for Shipment {
     }
 }
 
-#[derive(Debug)]
-pub struct ShipmentChannel {
+#[derive(Debug, Clone)]
+pub struct SpringTank {
     pub id: UniqueId,
+    pub ended: bool,
     pub host: SocksHost,
     pub port: u16,
     pub data: Vec<u8>,
 }
 
-impl BinDencode for ShipmentChannel {
+impl BinDencode for SpringTank {
     async fn read<R: AsyncReadExt + Unpin>(
         r: &mut R,
     ) -> tokio::io::Result<Self> {
         let id = UniqueId::read(r).await?;
+        let ended = r.read_u8().await? == 1;
         let host = SocksHost::read(r).await?;
         let port = r.read_u16_le().await?;
 
@@ -98,13 +109,14 @@ impl BinDencode for ShipmentChannel {
         unsafe { data.set_len(data_len) };
         r.read_exact(&mut data).await?;
 
-        Ok(Self { id, host, port, data })
+        Ok(Self { id, ended, host, port, data })
     }
 
     async fn write<W: AsyncWriteExt + Unpin>(
         &self, w: &mut W,
     ) -> tokio::io::Result<()> {
         self.id.write(w).await?;
+        w.write_u8(if self.ended { 1 } else { 0 }).await?;
         self.host.write(w).await?;
         w.write_u16_le(self.port).await?;
         w.write_u32_le(self.data.len() as u32).await?;
