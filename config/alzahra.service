@@ -1,0 +1,17 @@
+[Unit]
+Description=Alzahra
+After=syslog.target
+
+[Service]
+Type=simple
+Restart=always
+WorkingDirectory=/x/persian-gulf/
+# EnvironmentFile=/x/persian-gulf/.env
+ExecStart=/x/persian-gulf/target/release/alzahra
+KillSignal=SIGQUIT
+StandardError=file:/x/persian-gulf/logs/alzahra.err
+StandardOutput=file:/x/persian-gulf/logs/stdout.alzahra
+NotifyAccess=all
+
+[Install]
+WantedBy=multi-user.target
