@@ -1,10 +1,11 @@
 use crate::socks::SocksChannelCold;
+use base64::Engine;
 use shared::shipment::{BinDencode, SpringTank};
 use shared::utils::Buffer;
 use shared::{logger, shipment::Shipment, spring::Spring, uid::UniqueId};
 use std::collections::HashMap;
 use std::io::Cursor;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -18,48 +19,12 @@ async fn main() -> std::io::Result<()> {
     log::set_logger(&logger::MasterLogger).expect("could not init logger");
     log::set_max_level(log::LevelFilter::Trace);
 
-    let b64 = base64::engine::GeneralPurpose::new(
-        &base64::alphabet::STANDARD,
-        base64::engine::GeneralPurposeConfig::new()
-            .with_encode_padding(false)
-            .with_decode_padding_mode(
-                base64::engine::DecodePaddingMode::Indifferent,
-            ),
-    );
-
-    let client = reqwest::Client::builder()
-        .resolve(
-            "script.google.com",
-            (Ipv4Addr::new(216, 239, 38, 120), 443).into(),
-        )
-        .resolve(
-            "script.googleusercontent.com",
-            (Ipv4Addr::new(216, 239, 38, 120), 443).into(),
-        )
-        .build()
-        .unwrap();
-
-    let res = client
-        .post(concat!(
-            "https://script.google.com/macros/s/",
-            "AKfycbyQoU6ub9jNPnfYqpQksFBHdjVw8MCA_",
-            "spTAb8FgLgNNRoKvzG7MEcA0y2Xfe1dM3mI",
-            "/dev"
-        ))
-        .query(&[
-            ("t", "http://94.183.183.223:9920/api/proxy/bin-batch/"),
-            ("a", "F1ilebxCY4vqDYkisjbOgdOf9Sw"),
-        ])
-        .body("some text")
-        .send()
-        .await;
-
-    log::info!("res: {res:#?}");
-    if let Ok(res) = res {
-        log::info!("res: {:#?}", res.text().await);
-    }
-
-    return Ok(());
+    // log::info!("res: {res:#?}");
+    // if let Ok(res) = res {
+    //     log::info!("res: {:#?}", res.text().await);
+    // }
+    //
+    // return Ok(());
 
     let listener = TcpListener::bind("127.0.0.1:6007").await?;
     log::info!("socks on: 127.0.0.1:6007");
@@ -107,11 +72,66 @@ async fn main() -> std::io::Result<()> {
 async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
     let ship_uid = UniqueId::new(77);
 
+    let b64 = base64::engine::GeneralPurpose::new(
+        &base64::alphabet::STANDARD,
+        base64::engine::GeneralPurposeConfig::new()
+            .with_encode_padding(false)
+            .with_decode_padding_mode(
+                base64::engine::DecodePaddingMode::Indifferent,
+            ),
+    );
+
+    let client = reqwest::Client::builder()
+        .resolve(
+            "script.google.com",
+            (Ipv4Addr::new(216, 239, 38, 120), 443).into(),
+        )
+        .resolve(
+            "script.googleusercontent.com",
+            (Ipv4Addr::new(216, 239, 38, 120), 443).into(),
+        )
+        .pool_idle_timeout(std::time::Duration::from_secs(5))
+        .pool_max_idle_per_host(0)
+        .build()
+        .unwrap();
+
+    // let res = client
+    //     .post(concat!(
+    //         "https://script.google.com/macros/s/",
+    //         "AKfycbyQoU6ub9jNPnfYqpQksFBHdjVw8MCA_",
+    //         "spTAb8FgLgNNRoKvzG7MEcA0y2Xfe1dM3mI",
+    //         "/dev"
+    //     ))
+    //     .query(&[
+    //         ("t", "http://94.183.183.223:9920/api/proxy/bin-batch/"),
+    //         ("a", "F1ilebxCY4vqDYkisjbOgdOf9Sw"),
+    //     ])
+    //     .body("hi")
+    //     .send()
+    //     .await;
+
+    // log::debug!("test: {res:#?}");
+
+    // let res = client
+    //     .post(concat!(
+    //         "https://script.google.com/macros/s/",
+    //         "AKfycbyQoU6ub9jNPnfYqpQksFBHdjVw8MCA_",
+    //         "spTAb8FgLgNNRoKvzG7MEcA0y2Xfe1dM3mI",
+    //         "/dev"
+    //     ))
+    //     .query(&[
+    //         ("t", "http://94.183.183.223:9920/api/proxy/bin-batch/"),
+    //         ("a", "F1ilebxCY4vqDYkisjbOgdOf9Sw"),
+    //     ])
+    //     .body("some text")
+    //     .send()
+    //     .await;
+
     // auth = F1ilebxCY4vqDYkisjbOgdOf9Sw
     // AKfycbyQoU6ub9jNPnfYqpQksFBHdjVw8MCA_spTAb8FgLgNNRoKvzG7MEcA0y2Xfe1dM3mI
     // let ship_sleep = std::time::Duration::from_secs(1);
-    let client = reqwest::Client::builder().build().unwrap();
-    const SHIP_URL: &str = "http://localhost:7707/api/proxy/bin-batch/";
+    // let client = reqwest::Client::builder().build().unwrap();
+    // const SHIP_URL: &str = "http://localhost:7707/api/proxy/bin-batch/";
     let mut order = 0;
     let mut response_order = 0;
     let mut queued_shipments = Vec::with_capacity(10);
@@ -174,12 +194,30 @@ async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
         };
 
         let body = shipment.to_bytes().await;
+        let b64_encoded = b64.encode(body);
+
         log::info!(
             "sending ship: {order}: {} | tanks: {}",
-            body.len(),
+            b64_encoded.len(),
             shipment.tanks.len()
         );
-        let res = client.post(SHIP_URL).body(body).send().await;
+
+        let res = client
+            .post(concat!(
+                "https://script.google.com/macros/s/",
+                "AKfycbyQoU6ub9jNPnfYqpQksFBHdjVw8MCA_",
+                "spTAb8FgLgNNRoKvzG7MEcA0y2Xfe1dM3mI",
+                "/dev"
+            ))
+            .query(&[
+                ("t", "http://94.183.183.223:9920/api/proxy/bin-batch/"),
+                ("a", "F1ilebxCY4vqDYkisjbOgdOf9Sw"),
+            ])
+            .body(b64_encoded)
+            .send()
+            .await;
+
+        // let res = client.post(SHIP_URL).body(body).send().await;
 
         let res = match res {
             Ok(v) => v,
@@ -195,13 +233,21 @@ async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             continue;
         }
 
-        let Ok(data) = res.bytes().await else {
+        let Ok(data) = res.text().await else {
             log::error!("error getting res bytes");
             continue;
         };
 
+        let Ok(data) = b64.decode(data) else {
+            log::error!("invalid base64");
+            continue;
+        };
+
         let mut reader = Cursor::new(data);
-        let Ok(shipment) = Shipment::read(&mut reader).await else { continue };
+        let Ok(shipment) = Shipment::read(&mut reader).await else {
+            log::error!("invalid shipment");
+            continue;
+        };
 
         assert_eq!(shipment.ship_uid, ship_uid);
 
@@ -212,6 +258,7 @@ async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
 
         if shipment.order > response_order + 1 {
             queued_shipments.push(shipment);
+            log::warn!("queued: {}", queued_shipments.len());
             continue;
         }
 
