@@ -2,7 +2,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{uid::UniqueId, utils::SocksHost};
 
+
 pub trait BinDencode: Sized {
+    #![allow(async_fn_in_trait)]
+
     async fn read<R: AsyncReadExt + Unpin>(
         r: &mut R,
     ) -> tokio::io::Result<Self>;
