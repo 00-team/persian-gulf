@@ -53,7 +53,7 @@ async fn main() -> std::io::Result<()> {
             next_az = 0;
         }
 
-        az_springs[0].1.lock().await.insert(spring.id, spring);
+        az_springs[next_az].1.lock().await.insert(spring.id, spring);
     }
 
     for (t, _) in az_springs {
@@ -141,28 +141,38 @@ async fn shiper(
                 break;
             }
 
-            mg.retain(|_, s| {
+            let mut removal = Vec::with_capacity(mg.len());
+            for (sid, s) in mg.iter_mut() {
                 if data_collected_len >= 3 * 1024 * 1024 {
-                    return true;
+                    break;
                 }
 
                 if let Some(ch) = channels.get_mut(&s.id) {
                     let before = ch.data.len();
                     let ended = s.ended.load(Ordering::Relaxed)
-                        || s.read_data(&mut ch.data);
+                        || s.read_data(&mut ch.data).await;
                     data_collected_len += ch.data.len().saturating_sub(before);
                     ch.ended = ended;
-                    return !ended;
+                    if ended {
+                        removal.push(*sid);
+                    }
+                    continue;
                 }
 
-                let tank = s.to_tank();
+                let tank = s.to_tank().await;
                 data_collected_len += tank.data.len();
                 let ended = tank.ended;
                 if ended || !tank.data.is_empty() {
                     channels.insert(s.id, tank);
                 }
-                !ended
-            });
+                if ended {
+                    removal.push(*sid);
+                }
+            }
+
+            for sid in removal.iter() {
+                mg.remove(sid);
+            }
 
             running_springs = mg.len();
             if data_collection.elapsed().as_millis() >= 3_000

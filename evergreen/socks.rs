@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpStream, UdpSocket};
+use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 
 #[derive(Debug)]
@@ -208,9 +209,11 @@ impl SocksChannelCold {
             host: self.host,
             port: self.port,
             sx: sx_channel,
-            rx: rx_alzahra,
+            data: Arc::new(Mutex::new(Vec::new())),
             ended: ended.clone(),
         };
+
+        tokio::spawn(Self::debt_collector(rx_alzahra, runner.data.clone()));
 
         if let Some(udp) = self.udp {
             tokio::spawn(Self::udp_loop(self.s, udp, ended.clone()));
@@ -222,6 +225,14 @@ impl SocksChannelCold {
         tokio::spawn(Self::write_loop(tcp_write, rx_channel, ended.clone()));
 
         runner
+    }
+
+    async fn debt_collector(
+        mut rx: mpsc::Receiver<Vec<u8>>, data: Arc<Mutex<Vec<u8>>>,
+    ) {
+        while let Some(chunk) = rx.recv().await {
+            data.lock().await.extend_from_slice(&chunk);
+        }
     }
 
     async fn udp_loop(

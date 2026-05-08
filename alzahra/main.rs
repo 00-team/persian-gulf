@@ -96,10 +96,12 @@ impl Ship {
             host: sch.host.clone(),
             port: sch.port,
             sx: sx_channel,
-            rx: rx_ship,
+            data: Arc::new(Mutex::new(Vec::new())),
+            // rx: rx_ship,
             ended: ended.clone(),
         };
 
+        tokio::spawn(Self::debt_collector(rx_ship, runner.data.clone()));
         self.springs.insert(sch.id, runner);
 
         tokio::spawn(Self::run_channel(
@@ -137,6 +139,14 @@ impl Ship {
         let (tcp_read, tcp_write) = s.into_split();
         tokio::spawn(Self::read_loop(tcp_read, sx_ship, ended.clone()));
         tokio::spawn(Self::write_loop(tcp_write, rx_channel, ended.clone()));
+    }
+
+    async fn debt_collector(
+        mut rx_ship: mpsc::Receiver<Vec<u8>>, data: Arc<Mutex<Vec<u8>>>,
+    ) {
+        while let Some(chunk) = rx_ship.recv().await {
+            data.lock().await.extend_from_slice(&chunk);
+        }
     }
 
     async fn read_loop(

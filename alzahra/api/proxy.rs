@@ -78,27 +78,36 @@ async fn r_bin_batch(body: String, ships: Data<ActiveShips>) -> Horp {
             break;
         }
 
-        ship.springs.retain(|_, s| {
+        let mut removal = Vec::with_capacity(ship.springs.len());
+        for (sid, s) in ship.springs.iter_mut() {
             if data_collected_len >= 3 * 1024 * 1024 {
-                return true;
+                break;
             }
 
             if let Some(tank) = tanks.get_mut(&s.id) {
                 let before = tank.data.len();
                 let ended = s.ended.load(Ordering::Relaxed)
-                    || s.read_data(&mut tank.data);
+                    || s.read_data(&mut tank.data).await;
                 data_collected_len += tank.data.len().saturating_sub(before);
                 tank.ended = ended;
-                return !ended;
+                if ended {
+                    removal.push(*sid);
+                }
+                continue;
             }
 
-            let tank = s.to_tank();
+            let tank = s.to_tank().await;
             let ended = tank.ended;
             if ended || !tank.data.is_empty() {
                 tanks.insert(tank.id, tank);
             }
-            !ended
-        });
+            if ended {
+                removal.push(*sid);
+            }
+        }
+        for sid in removal.iter() {
+            ship.springs.remove(sid);
+        }
 
         if data_collection.elapsed().as_millis() >= 200
             || data_collected_len >= 3 * 1024 * 1024
