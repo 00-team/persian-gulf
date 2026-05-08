@@ -146,6 +146,7 @@ impl Ship {
                     break;
                 }
                 Ok(n) => {
+                    log::info!("capacity: {}", sx_ship.capacity());
                     if sx_ship.send(buf[..n].to_vec()).await.is_err() {
                         break;
                     }

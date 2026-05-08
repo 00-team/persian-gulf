@@ -1,4 +1,6 @@
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+
+use rustls::{ClientConfig, RootCertStore};
 
 mod tom {
     use std::path::PathBuf;
@@ -7,13 +9,13 @@ mod tom {
     pub struct ConfigToml {
         pub proxy: String,
         pub script_ids: Vec<(String, String)>,
-        pub alzahra: String,
+        pub alzahra: Vec<String>,
     }
 
     impl ConfigToml {
         pub fn def() -> Self {
             Self {
-                alzahra: "http://94.183.183.223:9920".to_string(),
+                alzahra: vec!["http://94.183.183.223:9920".to_string()],
                 proxy: "127.0.0.1:6007".to_string(),
                 script_ids: vec![(
                     "your google script ids".to_string(),
@@ -47,9 +49,7 @@ mod tom {
                 let c = toml::to_string(&ConfigToml::def()).unwrap();
                 std::fs::write("efg.example.toml", c.as_bytes()).unwrap();
 
-                log::error!(
-                    "move efg.example.toml to efg.toml and update it."
-                );
+                log::error!("move efg.example.toml to efg.toml and update it.");
                 panic!("");
             }
         };
@@ -67,7 +67,8 @@ pub struct Config {
     pub b64: base64::engine::GeneralPurpose,
     pub socks_bind: String,
     pub script_ids: Vec<(String, String)>,
-    pub alzahra: String,
+    pub alzahra: Vec<String>,
+    pub tls: Arc<ClientConfig>,
 }
 
 impl Config {
@@ -92,6 +93,7 @@ impl Config {
                         base64::engine::DecodePaddingMode::Indifferent,
                     ),
             ),
+            tls: Arc::new(build_tls_config()),
         }
     }
 
@@ -99,4 +101,30 @@ impl Config {
         static STATE: OnceLock<Config> = OnceLock::new();
         STATE.get_or_init(Self::init)
     }
+}
+
+fn build_tls_config() -> ClientConfig {
+    let mut root_store = RootCertStore::empty();
+
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("failed to install tls");
+
+    // assert!(self.verify_ssl);
+    // if self.verify_ssl {
+    // Add platform-native root certificates (best for most users)
+    // let native_certs =
+    //     rustls_native_certs::load_native_certs().map_err(|e| {
+    //         anyhow::anyhow!("failed to load native certs: {}", e)
+    //     })?;
+    // for cert in native_certs {
+    //     root_store.add(cert)?;
+    // }
+    if root_store.is_empty() {
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    }
+
+    ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth()
 }

@@ -25,33 +25,50 @@ async fn main() -> std::io::Result<()> {
     let listener = TcpListener::bind(&conf.socks_bind).await?;
     log::info!("socks on: {}", conf.socks_bind);
 
-    let socks_channels =
-        Arc::new(Mutex::new(HashMap::<UniqueId, Spring>::with_capacity(200)));
-    let mut channel_count = 0;
+    let mut az_springs = Vec::with_capacity(conf.alzahra.len());
+    let mut total_springs = 0;
+    let mut next_az = 0;
 
-    let h_shiper = tokio::task::spawn(shiper(socks_channels.clone()));
+    for az in conf.alzahra.iter() {
+        let sps = Arc::new(Mutex::new(
+            HashMap::<UniqueId, Spring>::with_capacity(200),
+        ));
+        let h_shiper = tokio::task::spawn(shiper(sps.clone(), az.clone()));
+        az_springs.push((h_shiper, sps));
+    }
+
     // let timeout = std::time::Duration::from_secs(30);
 
     while let Ok((stream, _)) = listener.accept().await {
-        channel_count += 1;
-        let scc = match SocksChannelCold::init(stream, channel_count).await {
+        total_springs += 1;
+        let scc = match SocksChannelCold::init(stream, total_springs).await {
             Ok(v) => v,
             Err(_) => continue,
         };
         // log::debug!("host: {:?}:{}", scc.host, scc.port);
         let spring = scc.run();
-        socks_channels.lock().await.insert(spring.id, spring);
+
+        next_az += 1;
+        if next_az >= az_springs.len() {
+            next_az = 0;
+        }
+
+        az_springs[0].1.lock().await.insert(spring.id, spring);
     }
 
-    h_shiper.await?;
+    for (t, _) in az_springs {
+        let _ = t.await;
+    }
 
     Ok(())
 }
 
-async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
+async fn shiper(
+    base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>, alzahra: String,
+) {
     let conf = Config::get();
     let base_fronter =
-        Arc::new(fronter::Fronter::new(&conf.alzahra, conf.script_ids.clone()));
+        Arc::new(fronter::Fronter::new(&alzahra, conf.script_ids.clone()));
 
     struct State {
         ship_id: UniqueId,
@@ -73,6 +90,7 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
         }
 
         pub fn reset(&mut self) {
+            log::warn!("\x1b[31mRESET\x1b[m");
             self.ship_id = UniqueId::new(44);
             self.order = 0;
             self.response_order = 0;
@@ -147,7 +165,7 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             });
 
             running_springs = mg.len();
-            if data_collection.elapsed().as_millis() >= 1500
+            if data_collection.elapsed().as_millis() >= 1000
                 || data_collected_len >= 30 * 1024 * 1024
             {
                 break;
@@ -165,7 +183,8 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
         if qlen > 7 {
             log::warn!("\x1b[93mWAITING FOR ALL TASKS\x1b[m");
             for t in tasks {
-                let _ = tokio::time::timeout(Duration::from_secs(5), t).await;
+                t.await;
+                // let _ = tokio::time::timeout(Duration::from_secs(5), t).await;
             }
             tasks = Vec::with_capacity(10);
         }
@@ -252,7 +271,7 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             let b64_encoded = conf.b64.encode(body);
 
             log::info!(
-                "<- \x1b[33m{order:3}\x1b[m: {:3} | {:10}",
+                "<- \x1b[33m{order:3}\x1b[m: {:3} |{:7}|",
                 shipment.tanks.len(),
                 b64_encoded.len(),
             );
@@ -260,6 +279,7 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             let Ok(data) = fronter.relay(b64_encoded).await else {
                 let mut state = state.lock().await;
                 if state.cycle == cycle {
+                    log::warn!("relay failed.");
                     state.reset();
                     springs.lock().await.clear();
                 }
@@ -281,6 +301,7 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             assert_eq!(shipment.ship_id, ship_id);
 
             if shipment.reset {
+                log::warn!("alzahra reset require");
                 let mut state = state.lock().await;
                 if state.cycle == cycle {
                     state.reset();
@@ -309,7 +330,7 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             }
 
             log::info!(
-                "\x1b[33m{:<3}\x1b[m ->: {:3} | {data_len:10}",
+                "\x1b[33m{:<3}\x1b[m ->: {:3} |{data_len:7}|",
                 shipment.order,
                 shipment.tanks.len()
             );

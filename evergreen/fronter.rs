@@ -8,7 +8,7 @@ use std::{
 };
 
 use reqwest::Url;
-use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
+use rustls::{ClientConfig, pki_types::ServerName};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf},
     net::TcpStream,
@@ -17,7 +17,7 @@ use tokio::{
 };
 use tokio_rustls::{TlsConnector, client::TlsStream};
 
-use crate::socks::EverError;
+use crate::{config::Config, socks::EverError};
 
 type ConnReader = ReadHalf<TlsStream<TcpStream>>;
 type ConnWriter = WriteHalf<TlsStream<TcpStream>>;
@@ -96,6 +96,7 @@ impl ConnectionPool {
         )
         .await
         else {
+            log::error!("new connect open failed");
             return;
         };
         let t = Instant::now();
@@ -127,6 +128,7 @@ impl ConnectionPool {
         )
         .await
         else {
+            log::error!("open connection failed");
             return Err(EverError::ConnectionFailed);
         };
 
@@ -162,6 +164,7 @@ pub struct Fronter {
 
 impl Fronter {
     pub fn new(alzahra: &str, script_ids: Vec<(String, String)>) -> Self {
+        let conf = Config::get();
         Self {
             http_host: "script.google.com",
             script_ids,
@@ -177,7 +180,7 @@ impl Fronter {
                     // google ip
                     connect_host: "216.239.38.120",
                     sni_host: "www.google.com",
-                    tls_config: Arc::new(Self::build_tls_config()),
+                    tls_config: conf.tls.clone(),
                 },
             },
             warmed: Arc::new(AtomicBool::new(false)),
@@ -209,9 +212,9 @@ impl Fronter {
 
         // self.semaphore.acquire().await
 
-        for _ in 0..3 {
+        for _ in 0..5 {
             let res = tokio::time::timeout(
-                std::time::Duration::from_secs(5),
+                std::time::Duration::from_secs(15),
                 self.relay_single(body.clone()),
             )
             .await;
@@ -309,32 +312,6 @@ impl Fronter {
         // # Start H2 connection (runs alongside H1 pool)
         // if self._h2:
         //     asyncio.create_task(self._h2_connect_and_warm())
-    }
-
-    fn build_tls_config() -> ClientConfig {
-        let mut root_store = RootCertStore::empty();
-
-        rustls::crypto::aws_lc_rs::default_provider()
-            .install_default()
-            .expect("failed to install tls");
-
-        // assert!(self.verify_ssl);
-        // if self.verify_ssl {
-        // Add platform-native root certificates (best for most users)
-        // let native_certs =
-        //     rustls_native_certs::load_native_certs().map_err(|e| {
-        //         anyhow::anyhow!("failed to load native certs: {}", e)
-        //     })?;
-        // for cert in native_certs {
-        //     root_store.add(cert)?;
-        // }
-        if root_store.is_empty() {
-            root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        }
-
-        ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_no_client_auth()
     }
 
     async fn read_http_response(
