@@ -2,7 +2,7 @@ use crate::models::Horp;
 use crate::{ActiveShips, config::Config};
 use actix_web::{HttpResponse, Scope, post, web::Data};
 use base64::Engine;
-use shared::{shipment::SpringTank, utils::Buffer};
+use shared::shipment::SpringTank;
 use shared::{
     shipment::{BinDencode, Shipment},
     uid::UniqueId,
@@ -22,41 +22,50 @@ async fn r_bin_batch(body: String, ships: Data<ActiveShips>) -> Horp {
         return crate::err!(BadRequest, "invalid shipment");
     };
 
-    let ship = ships.ship_get(shipment.ship_uid).await;
+    let ship_id = shipment.ship_id;
+    let ship = ships.ship_get(ship_id).await;
     let mut ship = ship.lock().await;
 
     if shipment.order <= ship.latest_order {
-        return crate::err!(BadRequest, "shipment order has already consmumed");
+        // do nothing...
+    } else if shipment.order > ship.latest_order + 1 {
+        ship.queued_shipments.push(shipment.clone());
+    } else {
+        ship.spring_update(&shipment).await;
     }
 
-    if shipment.order > ship.latest_order + 1 {
-        ship.queued_shipments.push(shipment);
-        log::warn!("return the acumelated data");
-        // TODO: return the acumelated buffer
-        return Ok(HttpResponse::Ok().finish());
+    ship.queued_shipments.sort_by_key(|o| o.order);
+    let queued = ship.queued_shipments.clone();
+    let mut queue_prog = 0;
+    for q in queued.iter() {
+        if ship.latest_order + 1 != q.order {
+            break;
+        }
+        ship.spring_update(q).await;
+        queue_prog += 1;
     }
+    ship.queued_shipments.drain(0..queue_prog);
 
-    ship.latest_order = shipment.order;
-
-    for ch in shipment.tanks {
-        let Some(schr) = ship.springs.get(&ch.id) else {
-            if ch.ended && ch.data.is_empty() {
-                continue;
-            }
-            ship.new_channel(&ch).await;
-            continue;
+    if shipment.order_request <= ship.response_order {
+        let Some(bo) = ship
+            .order_backlog
+            .iter()
+            .find(|o| o.order == shipment.order_request)
+        else {
+            ship.reset();
+            let s = Shipment {
+                ship_id,
+                order: 0,
+                reset: true,
+                order_request: 0,
+                tanks: Vec::new(),
+            };
+            let body = conf.b64.encode(s.to_bytes().await);
+            return Ok(HttpResponse::Ok().body(body));
         };
 
-        if schr.ended.load(Ordering::Relaxed) {
-            continue;
-        }
-
-        for buf in Buffer::from_data(&ch.data) {
-            let _ = schr.sx.send(buf).await;
-        }
-        if ch.ended {
-            schr.ended.store(true, Ordering::Relaxed);
-        }
+        let body = conf.b64.encode(bo.to_bytes().await);
+        return Ok(HttpResponse::Ok().body(body));
     }
 
     let data_collection = std::time::Instant::now();
@@ -100,7 +109,9 @@ async fn r_bin_batch(body: String, ships: Data<ActiveShips>) -> Horp {
 
     ship.response_order += 1;
     let response_shipment = Shipment {
-        ship_uid: shipment.ship_uid,
+        ship_id,
+        order_request: 0,
+        reset: false,
         tanks: tanks.into_values().collect(),
         order: ship.response_order,
     };

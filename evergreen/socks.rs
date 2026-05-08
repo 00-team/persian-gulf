@@ -1,3 +1,4 @@
+use rustls::pki_types::InvalidDnsNameError;
 use shared::shipment::BinDencode;
 use shared::spring::Spring;
 use shared::uid::UniqueId;
@@ -14,10 +15,25 @@ pub enum EverError {
     SocksVersionMismatch,
     SocksNoAcceptableMethod,
     SocksAuthRequired,
-    SocksBadAuth,
+    // SocksBadAuth,
     SocksInvalidConnect,
-    SocksUnsupportedAddress,
+    // SocksUnsupportedAddress,
+    InvalidDnsNameError,
+    RequestFailed,
+    ConnectionFailed,
+    ReadTimeout,
+    Eof,
+    InvalidHttpResponse,
+    InvalidGzip,
+    InvalidBody,
+    #[allow(dead_code)]
     Io(std::io::Error),
+}
+
+impl From<InvalidDnsNameError> for EverError {
+    fn from(_: InvalidDnsNameError) -> Self {
+        Self::InvalidDnsNameError
+    }
 }
 
 impl From<std::io::Error> for EverError {
@@ -42,7 +58,7 @@ impl SocksChannelCold {
 
     const AUTH_VERSION: u8 = 0x01;
     const AUTH_SUCCESS: u8 = 0x00;
-    const AUTH_FAILURE: u8 = 0x01;
+    // const AUTH_FAILURE: u8 = 0x01;
 
     pub async fn init(
         stream: TcpStream, index: u64,
@@ -196,7 +212,9 @@ impl SocksChannelCold {
                     break;
                 }
                 Ok(n) => {
-                    sx_alzahra.send(Buffer::new(&buf[..n])).await.unwrap();
+                    if sx_alzahra.send(Buffer::new(&buf[..n])).await.is_err() {
+                        break;
+                    }
                 }
                 Err(e) => {
                     log::error!("read error: {e:#?}");

@@ -158,30 +158,30 @@ fse!(std::io::Error);
 #[macro_export]
 macro_rules! err {
     ($code:ident) => {
-        Err(crate::AppErr::from(crate::ErrorCode::$code))
+        Err($crate::AppErr::from($crate::ErrorCode::$code))
     };
 
     ($code:ident, $debug:literal) => {
-        Err(crate::AppErr::from(crate::ErrorCode::$code).debug($debug))
+        Err($crate::AppErr::from($crate::ErrorCode::$code).debug($debug))
     };
 
     ($code:ident, $debug:expr) => {
-        Err(crate::AppErr::from(crate::ErrorCode::$code).debug(&$debug))
+        Err($crate::AppErr::from($crate::ErrorCode::$code).debug(&$debug))
     };
 
     (r, $code:ident) => {
-        crate::AppErr::from(crate::ErrorCode::$code)
+        $crate::AppErr::from($crate::ErrorCode::$code)
     };
 
     (c, $code:ident) => {
-        Err(crate::ErrorCode::$code)
+        Err($crate::ErrorCode::$code)
     };
 
     (r,$code:ident, $debug:literal) => {
-        crate::AppErr::from(crate::ErrorCode::$code).debug($debug)
+        $crate::AppErr::from($crate::ErrorCode::$code).debug($debug)
     };
 
     (r,$code:ident, $debug:expr) => {
-        crate::AppErr::from(crate::ErrorCode::$code).debug(&$debug)
+        $crate::AppErr::from($crate::ErrorCode::$code).debug(&$debug)
     };
 }

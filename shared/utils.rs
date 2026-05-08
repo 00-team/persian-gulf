@@ -95,7 +95,7 @@ impl BinDencode for SocksHost {
     }
 }
 
-const _BUF_LEN: usize = 8 * 1024;
+const _BUF_LEN: usize = 32 * 1024;
 
 pub struct Buffer {
     data: [u8; _BUF_LEN],
@@ -107,6 +107,10 @@ impl Buffer {
 
     pub const fn len(&self) -> usize {
         self.len
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
     }
 
     pub const fn is_full(&self) -> bool {
@@ -124,6 +128,6 @@ impl Buffer {
     }
 
     pub fn from_data(data: &[u8]) -> impl Iterator<Item = Buffer> + '_ {
-        data.chunks(Self::LEN).map(|chunk| Buffer::new(chunk))
+        data.chunks(Self::LEN).map(Buffer::new)
     }
 }

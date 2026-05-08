@@ -4,7 +4,7 @@ pub struct MasterLogger;
 impl log::Log for MasterLogger {
     fn enabled(&self, md: &log::Metadata) -> bool {
         let t = md.target();
-        if t.starts_with("hyper_util") {
+        if t.starts_with("hyper_util") || t.starts_with("rustls") {
             return false;
         }
         if md.level() > log::Level::Debug {

@@ -5,13 +5,13 @@ use shared::utils::Buffer;
 use shared::{logger, shipment::Shipment, spring::Spring, uid::UniqueId};
 use std::collections::HashMap;
 use std::io::Cursor;
-use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
+mod fronter;
 mod socks;
 
 #[tokio::main]
@@ -26,7 +26,7 @@ async fn main() -> std::io::Result<()> {
     //
     // return Ok(());
 
-    let listener = TcpListener::bind("127.0.0.1:6007").await?;
+    let listener = TcpListener::bind("0.0.0.0:6007").await?;
     log::info!("socks on: 127.0.0.1:6007");
 
     let socks_channels =
@@ -70,7 +70,7 @@ async fn main() -> std::io::Result<()> {
 }
 
 async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
-    let ship_uid = UniqueId::new(77);
+    let ship_id = UniqueId::new(77);
 
     let b64 = base64::engine::GeneralPurpose::new(
         &base64::alphabet::STANDARD,
@@ -81,59 +81,13 @@ async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             ),
     );
 
-    let client = reqwest::Client::builder()
-        .resolve(
-            "script.google.com",
-            (Ipv4Addr::new(216, 239, 38, 120), 443).into(),
-        )
-        .resolve(
-            "script.googleusercontent.com",
-            (Ipv4Addr::new(216, 239, 38, 120), 443).into(),
-        )
-        .pool_idle_timeout(std::time::Duration::from_secs(5))
-        .pool_max_idle_per_host(0)
-        .build()
-        .unwrap();
+    let mut fronter = fronter::Fronter::new();
 
-    // let res = client
-    //     .post(concat!(
-    //         "https://script.google.com/macros/s/",
-    //         "AKfycbyQoU6ub9jNPnfYqpQksFBHdjVw8MCA_",
-    //         "spTAb8FgLgNNRoKvzG7MEcA0y2Xfe1dM3mI",
-    //         "/dev"
-    //     ))
-    //     .query(&[
-    //         ("t", "http://94.183.183.223:9920/api/proxy/bin-batch/"),
-    //         ("a", "F1ilebxCY4vqDYkisjbOgdOf9Sw"),
-    //     ])
-    //     .body("hi")
-    //     .send()
-    //     .await;
-
-    // log::debug!("test: {res:#?}");
-
-    // let res = client
-    //     .post(concat!(
-    //         "https://script.google.com/macros/s/",
-    //         "AKfycbyQoU6ub9jNPnfYqpQksFBHdjVw8MCA_",
-    //         "spTAb8FgLgNNRoKvzG7MEcA0y2Xfe1dM3mI",
-    //         "/dev"
-    //     ))
-    //     .query(&[
-    //         ("t", "http://94.183.183.223:9920/api/proxy/bin-batch/"),
-    //         ("a", "F1ilebxCY4vqDYkisjbOgdOf9Sw"),
-    //     ])
-    //     .body("some text")
-    //     .send()
-    //     .await;
-
-    // auth = F1ilebxCY4vqDYkisjbOgdOf9Sw
-    // AKfycbyQoU6ub9jNPnfYqpQksFBHdjVw8MCA_spTAb8FgLgNNRoKvzG7MEcA0y2Xfe1dM3mI
     // let ship_sleep = std::time::Duration::from_secs(1);
     // let client = reqwest::Client::builder().build().unwrap();
     // const SHIP_URL: &str = "http://localhost:7707/api/proxy/bin-batch/";
     let mut order = 0;
-    let mut response_order = 0;
+    let mut response_order = 1;
     let mut queued_shipments = Vec::with_capacity(10);
 
     loop {
@@ -188,7 +142,9 @@ async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
 
         order += 1;
         let shipment = Shipment {
-            ship_uid,
+            ship_id,
+            reset: false,
+            order_request: response_order,
             order,
             tanks: channels.into_values().collect(),
         };
@@ -197,45 +153,17 @@ async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
         let b64_encoded = b64.encode(body);
 
         log::info!(
-            "sending ship: {order}: {} | tanks: {}",
+            "<- {order}: {} | {}",
+            shipment.tanks.len(),
             b64_encoded.len(),
-            shipment.tanks.len()
         );
 
-        let res = client
-            .post(concat!(
-                "https://script.google.com/macros/s/",
-                "AKfycbyQoU6ub9jNPnfYqpQksFBHdjVw8MCA_",
-                "spTAb8FgLgNNRoKvzG7MEcA0y2Xfe1dM3mI",
-                "/dev"
-            ))
-            .query(&[
-                ("t", "http://94.183.183.223:9920/api/proxy/bin-batch/"),
-                ("a", "F1ilebxCY4vqDYkisjbOgdOf9Sw"),
-            ])
-            .body(b64_encoded)
-            .send()
-            .await;
-
-        // let res = client.post(SHIP_URL).body(body).send().await;
-
-        let res = match res {
+        let data = match fronter.relay(b64_encoded).await {
             Ok(v) => v,
             Err(e) => {
-                order = order.saturating_sub(1);
                 log::error!("request error: {e:?}");
                 continue;
             }
-        };
-
-        if res.status() != 200 {
-            log::error!("request error: {:?}", res.text().await);
-            continue;
-        }
-
-        let Ok(data) = res.text().await else {
-            log::error!("error getting res bytes");
-            continue;
         };
 
         let Ok(data) = b64.decode(data) else {
@@ -243,26 +171,28 @@ async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             continue;
         };
 
+        let data_len = data.len();
         let mut reader = Cursor::new(data);
         let Ok(shipment) = Shipment::read(&mut reader).await else {
             log::error!("invalid shipment");
             continue;
         };
 
-        assert_eq!(shipment.ship_uid, ship_uid);
+        assert_eq!(shipment.ship_id, ship_id);
 
-        if shipment.order <= response_order {
+        if shipment.order < response_order {
             log::error!("response order mismatch");
             continue;
         }
 
-        if shipment.order > response_order + 1 {
+        if shipment.order > response_order {
             queued_shipments.push(shipment);
             log::warn!("queued: {}", queued_shipments.len());
             continue;
         }
 
-        response_order = shipment.order;
+        log::info!("-> {} | {data_len}", shipment.tanks.len());
+        response_order = shipment.order + 1;
 
         let springs = springs.lock().await;
         for tank in shipment.tanks {
@@ -273,7 +203,10 @@ async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             }
 
             for buf in Buffer::from_data(&tank.data) {
-                let _ = spring.sx.send(buf).await;
+                if spring.sx.send(buf).await.is_err() {
+                    spring.ended.store(true, Ordering::Relaxed);
+                    break;
+                }
             }
             if tank.ended {
                 spring.ended.store(true, Ordering::Relaxed);

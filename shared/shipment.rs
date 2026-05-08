@@ -2,7 +2,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{uid::UniqueId, utils::SocksHost};
 
-
 pub trait BinDencode: Sized {
     #![allow(async_fn_in_trait)]
 
@@ -14,47 +13,18 @@ pub trait BinDencode: Sized {
     ) -> tokio::io::Result<()>;
 }
 
-// pub mod bin_tools {
-//     use tokio::io::{AsyncReadExt, AsyncWriteExt, Result};
-//
-//     macro_rules! wrp {
-//         ($([$rfn:ident, $wfn:ident, $pty:ident],)*) => {
-//             $(
-//             pub fn $rfn<R: AsyncReadExt + Un>(r: &mut R) -> Result<$pty> {
-//                 let mut buf = [0u8; core::mem::size_of::<$pty>()];
-//                 r.read_exact(&mut buf)?;
-//                 Ok($pty::from_le_bytes(buf))
-//             }
-//
-//             pub fn $wfn<W: AsyncWriteExt>(w: &mut W, value: $pty) -> Result<()> {
-//                 w.write_all(&value.to_le_bytes())
-//             }
-//             )*
-//         };
-//     }
-//
-//     wrp!(
-//         [read_u64, write_u64, u64],
-//         [read_u32, write_u32, u32],
-//         [read_u16, write_u16, u16],
-//         [read_u8, write_u8, u8],
-//     );
-// }
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Shipment {
-    pub ship_uid: UniqueId,
+    pub ship_id: UniqueId,
     pub order: u64,
+    pub order_request: u64,
+    pub reset: bool,
     pub tanks: Vec<SpringTank>,
-    /*
-    <evergreen unique id> - <request id: u64> - <number of channels: u16>
-    <channel id> - <host> - <port> - <data len: u32> - <data>
-    */
 }
 
 impl Shipment {
     pub async fn to_bytes(&self) -> Vec<u8> {
-        let buf = Vec::with_capacity(1 * 1024 * 1024);
+        let buf = Vec::with_capacity(2 * 1024 * 1024);
         let mut cursor = std::io::Cursor::new(buf);
         self.write(&mut cursor).await.unwrap();
         cursor.into_inner()
@@ -63,22 +33,26 @@ impl Shipment {
 
 impl BinDencode for Shipment {
     async fn read<R: AsyncReadExt + Unpin>(r: &mut R) -> std::io::Result<Self> {
-        let ship_uid = UniqueId::read(r).await?;
+        let ship_id = UniqueId::read(r).await?;
         let order = r.read_u64_le().await?;
+        let order_request = r.read_u64_le().await?;
+        let reset = r.read_u8().await? == 1;
         let ch_len = r.read_u16_le().await? as usize;
         let mut channels = Vec::with_capacity(ch_len);
         for _ in 0..ch_len {
             channels.push(SpringTank::read(r).await?);
         }
 
-        Ok(Self { ship_uid, order, tanks: channels })
+        Ok(Self { ship_id, order, order_request, reset, tanks: channels })
     }
 
     async fn write<W: AsyncWriteExt + Unpin>(
         &self, w: &mut W,
     ) -> tokio::io::Result<()> {
-        self.ship_uid.write(w).await?;
+        self.ship_id.write(w).await?;
         w.write_u64_le(self.order).await?;
+        w.write_u64_le(self.order_request).await?;
+        w.write_u8(if self.reset { 1 } else { 0 }).await?;
         w.write_u16_le(self.tanks.len() as u16).await?;
 
         for ch in self.tanks.iter() {
@@ -109,6 +83,7 @@ impl BinDencode for SpringTank {
 
         let data_len = r.read_u32_le().await? as usize;
         let mut data = Vec::with_capacity(data_len);
+        #[allow(clippy::uninit_vec)]
         unsafe { data.set_len(data_len) };
         r.read_exact(&mut data).await?;
 

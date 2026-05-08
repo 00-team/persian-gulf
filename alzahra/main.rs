@@ -2,7 +2,7 @@ use crate::config::Config;
 use actix_web::web::Data;
 use actix_web::{
     App, HttpServer, middleware as mw,
-    web::{ServiceConfig, scope, self},
+    web::{self, ServiceConfig, scope},
 };
 use shared::shipment::{Shipment, SpringTank};
 use shared::spring::Spring;
@@ -38,9 +38,55 @@ pub struct Ship {
     pub latest_order: u64,
     pub response_order: u64,
     pub queued_shipments: Vec<Shipment>,
+    pub order_backlog: Vec<Shipment>,
 }
 
 impl Ship {
+    pub fn reset(&mut self) {
+        self.springs.clear();
+        self.queued_shipments.clear();
+        self.order_backlog.clear();
+        self.latest_order = 0;
+        self.response_order = 0;
+    }
+
+    pub fn new_backlog(&mut self, sm: Shipment) {
+        self.order_backlog.push(sm);
+        self.order_backlog.sort_by_key(|o| o.order);
+
+        if self.order_backlog.len() > 10 {
+            self.order_backlog.remove(0);
+        }
+    }
+
+    pub async fn spring_update(&mut self, sm: &Shipment) {
+        self.latest_order = sm.order;
+
+        for ch in sm.tanks.iter() {
+            let Some(schr) = self.springs.get(&ch.id) else {
+                if ch.ended && ch.data.is_empty() {
+                    continue;
+                }
+                self.new_channel(ch).await;
+                continue;
+            };
+
+            if schr.ended.load(Ordering::Relaxed) {
+                continue;
+            }
+
+            for buf in Buffer::from_data(&ch.data) {
+                if schr.sx.send(buf).await.is_err() {
+                    schr.ended.store(true, Ordering::Relaxed);
+                    break;
+                }
+            }
+            if ch.ended {
+                schr.ended.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
     pub async fn new_channel(&mut self, sch: &SpringTank) {
         let ended = Arc::new(AtomicBool::new(false));
 
@@ -102,11 +148,11 @@ impl Ship {
                     break;
                 }
                 Ok(n) => {
-                    let _ = sx_ship.send(Buffer::new(&buf[..n])).await;
-                    // buf_len = 0;
+                    if sx_ship.send(Buffer::new(&buf[..n])).await.is_err() {
+                        break;
+                    }
                 }
-                Err(e) => {
-                    log::error!("read error: {e:#?}");
+                Err(_) => {
                     break;
                 }
             };
@@ -120,9 +166,13 @@ impl Ship {
         ended: Arc<AtomicBool>,
     ) {
         while !ended.load(Ordering::Relaxed) {
-            let Some(data) = rx_channel.recv().await else { return };
-            stream.write_all(data.read()).await.unwrap();
+            let Some(data) = rx_channel.recv().await else { break };
+            if stream.write_all(data.read()).await.is_err() {
+                break;
+            }
         }
+
+        ended.store(true, Ordering::SeqCst);
     }
 }
 

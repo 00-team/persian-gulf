@@ -15,4 +15,10 @@ shared.workspace = true
 tokio.workspace = true
 base64.workspace = true
 
-reqwest = { version = "0.12.15", features = ["json"] }
+reqwest = { version = "0.12.15", features = ["json", "rustls-tls"] }
+rustls = "=0.23.40"
+webpki-roots = "1.0.7"
+tokio-rustls = "0.26.4"
+httparse = "1.10.1"
+http = "1.4.0"
+async-compression = { version = "0.4.42", features = ["tokio", "gzip"] }
