@@ -252,7 +252,7 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             let b64_encoded = conf.b64.encode(body);
 
             log::info!(
-                "<- \x1b[33m{order}\x1b[m: {} | {}",
+                "<- \x1b[33m{order:3}\x1b[m: {:3} | {:10}",
                 shipment.tanks.len(),
                 b64_encoded.len(),
             );
@@ -309,7 +309,7 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             }
 
             log::info!(
-                "\x1b[33m{}\x1b[m ->: {} | {data_len}",
+                "\x1b[33m{:<3}\x1b[m ->: {:3} | {data_len:10}",
                 shipment.order,
                 shipment.tanks.len()
             );
