@@ -211,11 +211,66 @@ impl SocksChannelCold {
             ended: ended.clone(),
         };
 
+        if let Some(udp) = self.udp {
+            tokio::spawn(Self::udp_loop(self.s, udp, ended.clone()));
+            return runner;
+        }
+
         let (tcp_read, tcp_write) = self.s.into_split();
         tokio::spawn(Self::read_loop(tcp_read, sx_alzahra, ended.clone()));
         tokio::spawn(Self::write_loop(tcp_write, rx_channel, ended.clone()));
 
         runner
+    }
+
+    async fn udp_loop(
+        mut tcp: TcpStream, udp: UdpSocket, ended: Arc<AtomicBool>,
+    ) {
+        let mut tcp_buf = [0u8; 1]; // just to detect EOF
+        let mut udp_buf = vec![0u8; 65535];
+
+        while !ended.load(Ordering::Relaxed) {
+            tokio::select! {
+                read_res = tcp.read(&mut tcp_buf) => {
+                    if read_res.map(|n| n == 0).unwrap_or(true) {
+                        break;
+                    }
+                }
+                udp_res = udp.recv_from(&mut udp_buf) => {
+                    let (len, sender) = match udp_res {
+                        Ok(r) => r,
+                        Err(_) => break,
+                    };
+
+                    let data = &udp_buf[..len];
+                    log::info!("udp: {sender:?}\n\n{data:?}");
+
+                    // if let Some(client) = client_addr {
+                    //     if sender == client {
+                    //         // Packet from the client -> forward to target
+                    //         if let Err(_) = forward_request(&udp_socket, data, client).await {
+                    //             break;
+                    //         }
+                    //     } else {
+                    //         // Packet from a target -> wrap & send back to client
+                    //         if let Err(_) = send_reply(&udp_socket, data, sender, client).await {
+                    //             break;
+                    //         }
+                    //     }
+                    // } else {
+                    //     // First datagram – assume it comes from the client.
+                    //     // You could add extra validation (check SOCKS5 header) but in practice
+                    //     // the first one will be from the client.
+                    //     client_addr = Some(sender);
+                    //     if let Err(_) = forward_request(&udp_socket, data, sender).await {
+                    //         break;
+                    //     }
+                    // }
+
+
+                }
+            }
+        }
     }
 
     async fn read_loop(

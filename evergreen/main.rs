@@ -64,9 +64,6 @@ async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
     let mut fronter =
         fronter::Fronter::new(&conf.alzahra, conf.script_ids.clone());
 
-    // let ship_sleep = std::time::Duration::from_secs(1);
-    // let client = reqwest::Client::builder().build().unwrap();
-    // const SHIP_URL: &str = "http://localhost:7707/api/proxy/bin-batch/";
     let mut order = 0;
     let mut response_order = 1;
     let mut queued_shipments = Vec::with_capacity(10);
