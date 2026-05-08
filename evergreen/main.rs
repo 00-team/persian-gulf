@@ -1,7 +1,6 @@
 use crate::socks::SocksChannelCold;
 use base64::Engine;
 use shared::shipment::{BinDencode, SpringTank};
-use shared::utils::Buffer;
 use shared::{logger, shipment::Shipment, spring::Spring, uid::UniqueId};
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -181,6 +180,9 @@ async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
         assert_eq!(shipment.ship_id, ship_id);
 
         if shipment.reset {
+            order = 0;
+            response_order = 1;
+            queued_shipments.clear();
             springs.lock().await.clear();
             continue;
         }
@@ -207,12 +209,10 @@ async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
                 continue;
             }
 
-            for buf in Buffer::from_data(&tank.data) {
-                if spring.sx.send(buf).await.is_err() {
-                    spring.ended.store(true, Ordering::Relaxed);
-                    break;
-                }
+            if spring.sx.send(tank.data).await.is_err() {
+                spring.ended.store(true, Ordering::Relaxed);
             }
+
             if tank.ended {
                 spring.ended.store(true, Ordering::Relaxed);
             }

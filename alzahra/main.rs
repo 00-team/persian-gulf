@@ -22,7 +22,7 @@ mod config;
 mod models;
 
 pub use models::{AppErr, ErrorCode};
-use shared::{uid::UniqueId, utils::Buffer};
+use shared::uid::UniqueId;
 
 fn config_app(app: &mut ServiceConfig) {
     app.service(scope("/api").service(api::proxy::router()));
@@ -75,12 +75,10 @@ impl Ship {
                 continue;
             }
 
-            for buf in Buffer::from_data(&ch.data) {
-                if schr.sx.send(buf).await.is_err() {
-                    schr.ended.store(true, Ordering::Relaxed);
-                    break;
-                }
+            if schr.sx.send(ch.data.clone()).await.is_err() {
+                schr.ended.store(true, Ordering::Relaxed);
             }
+
             if ch.ended {
                 schr.ended.store(true, Ordering::Relaxed);
             }
@@ -90,8 +88,8 @@ impl Ship {
     pub async fn new_channel(&mut self, sch: &SpringTank) {
         let ended = Arc::new(AtomicBool::new(false));
 
-        let (sx_ship, rx_ship) = mpsc::channel::<Buffer>(1024);
-        let (sx_channel, rx_channel) = mpsc::channel::<Buffer>(1024);
+        let (sx_ship, rx_ship) = mpsc::channel::<Vec<u8>>(2048);
+        let (sx_channel, rx_channel) = mpsc::channel::<Vec<u8>>(2048);
 
         let runner = Spring {
             id: sch.id,
@@ -113,8 +111,8 @@ impl Ship {
     }
 
     async fn run_channel(
-        sch: SpringTank, sx_ship: mpsc::Sender<Buffer>,
-        rx_channel: mpsc::Receiver<Buffer>, ended: Arc<AtomicBool>,
+        sch: SpringTank, sx_ship: mpsc::Sender<Vec<u8>>,
+        rx_channel: mpsc::Receiver<Vec<u8>>, ended: Arc<AtomicBool>,
     ) {
         let addr = sch.host.to_addr(sch.port);
         let mut s = match TcpStream::connect(&addr).await {
@@ -137,10 +135,10 @@ impl Ship {
     }
 
     async fn read_loop(
-        mut stream: OwnedReadHalf, sx_ship: mpsc::Sender<Buffer>,
+        mut stream: OwnedReadHalf, sx_ship: mpsc::Sender<Vec<u8>>,
         ended: Arc<AtomicBool>,
     ) {
-        let mut buf = [0u8; Buffer::LEN];
+        let mut buf = vec![0u8; 65536];
 
         while !ended.load(Ordering::Relaxed) {
             match stream.read(&mut buf).await {
@@ -148,7 +146,7 @@ impl Ship {
                     break;
                 }
                 Ok(n) => {
-                    if sx_ship.send(Buffer::new(&buf[..n])).await.is_err() {
+                    if sx_ship.send(buf[..n].to_vec()).await.is_err() {
                         break;
                     }
                 }
@@ -162,12 +160,12 @@ impl Ship {
     }
 
     async fn write_loop(
-        mut stream: OwnedWriteHalf, mut rx_channel: mpsc::Receiver<Buffer>,
+        mut stream: OwnedWriteHalf, mut rx_channel: mpsc::Receiver<Vec<u8>>,
         ended: Arc<AtomicBool>,
     ) {
         while !ended.load(Ordering::Relaxed) {
             let Some(data) = rx_channel.recv().await else { break };
-            if stream.write_all(data.read()).await.is_err() {
+            if stream.write_all(&data).await.is_err() {
                 break;
             }
         }

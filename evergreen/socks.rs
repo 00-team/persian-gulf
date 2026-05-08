@@ -2,12 +2,12 @@ use rustls::pki_types::InvalidDnsNameError;
 use shared::shipment::BinDencode;
 use shared::spring::Spring;
 use shared::uid::UniqueId;
-use shared::utils::{Buffer, SocksHost};
+use shared::utils::SocksHost;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::mpsc;
 
 #[derive(Debug)]
@@ -47,11 +47,13 @@ pub struct SocksChannelCold {
     index: u64,
     pub host: SocksHost,
     pub port: u16,
+    udp: Option<UdpSocket>,
 }
 
 impl SocksChannelCold {
     const SOCKS_VERSION: u8 = 0x05;
     const CMD_CONNECT: u8 = 0x01;
+    const CMD_UDP_CONNECT: u8 = 0x03;
 
     const METHOD_NO_AUTH: u8 = 0x00;
     const METHOD_USER_PASS: u8 = 0x02;
@@ -63,8 +65,13 @@ impl SocksChannelCold {
     pub async fn init(
         stream: TcpStream, index: u64,
     ) -> Result<Self, EverError> {
-        let mut sc =
-            Self { s: stream, index, host: SocksHost::Ipv4([0; 4]), port: 0 };
+        let mut sc = Self {
+            s: stream,
+            index,
+            host: SocksHost::Ipv4([0; 4]),
+            port: 0,
+            udp: None,
+        };
 
         sc.handshake().await?;
         sc.target().await?;
@@ -143,12 +150,22 @@ impl SocksChannelCold {
         // socks version, command, RSV, ATYP
         let mut req_header = [0u8; 3];
         self.s.read_exact(&mut req_header).await?;
-        if req_header[0] != Self::SOCKS_VERSION
-            || req_header[1] != Self::CMD_CONNECT
-            || req_header[2] != 0
-        {
+        log::info!("connect: {req_header:?}");
+        if req_header[0] != Self::SOCKS_VERSION || req_header[2] != 0 {
             return Err(EverError::SocksInvalidConnect);
         }
+
+        let mut cp = 0u16;
+        if req_header[1] == Self::CMD_UDP_CONNECT {
+            let mut addr = self.s.local_addr()?;
+            addr.set_port(0);
+            let udp = UdpSocket::bind(addr).await?;
+            cp = udp.local_addr()?.port();
+            self.udp = Some(udp);
+        } else if req_header[1] == Self::CMD_CONNECT {
+        } else {
+            return Err(EverError::SocksInvalidConnect);
+        };
 
         let host = SocksHost::read(&mut self.s).await?;
 
@@ -159,21 +176,22 @@ impl SocksChannelCold {
         self.host = host;
         self.port = port;
 
-        // assume Success reply
-        self.s
-            .write_all(&[
-                Self::SOCKS_VERSION,
-                0x00, // succeeded
-                0x00,
-                SocksHost::ATYP_IPV4,
-                0,
-                0,
-                0,
-                0, // BND.ADDR 0.0.0.0
-                0,
-                0, // BND.PORT 0
-            ])
-            .await?;
+        let cp = cp.to_be_bytes();
+
+        let reply = [
+            Self::SOCKS_VERSION,
+            0x00, // succeeded
+            0x00,
+            SocksHost::ATYP_IPV4,
+            0,
+            0,
+            0,
+            0, // BND.ADDR 0.0.0.0
+            cp[0],
+            cp[1],
+        ];
+
+        self.s.write_all(&reply).await?;
 
         Ok(())
     }
@@ -181,8 +199,8 @@ impl SocksChannelCold {
     pub fn run(self) -> Spring {
         let ended = Arc::new(AtomicBool::new(false));
 
-        let (sx_alzahra, rx_alzahra) = mpsc::channel::<Buffer>(1024);
-        let (sx_channel, rx_channel) = mpsc::channel::<Buffer>(1024);
+        let (sx_alzahra, rx_alzahra) = mpsc::channel::<Vec<u8>>(2048);
+        let (sx_channel, rx_channel) = mpsc::channel::<Vec<u8>>(2048);
 
         let runner = Spring {
             id: UniqueId::new(self.index),
@@ -201,10 +219,10 @@ impl SocksChannelCold {
     }
 
     async fn read_loop(
-        mut stream: OwnedReadHalf, sx_alzahra: mpsc::Sender<Buffer>,
+        mut stream: OwnedReadHalf, sx_alzahra: mpsc::Sender<Vec<u8>>,
         ended: Arc<AtomicBool>,
     ) {
-        let mut buf = [0u8; Buffer::LEN];
+        let mut buf = vec![0u8; 65536];
 
         while !ended.load(Ordering::Relaxed) {
             match stream.read(&mut buf).await {
@@ -212,7 +230,7 @@ impl SocksChannelCold {
                     break;
                 }
                 Ok(n) => {
-                    if sx_alzahra.send(Buffer::new(&buf[..n])).await.is_err() {
+                    if sx_alzahra.send(buf[..n].to_vec()).await.is_err() {
                         break;
                     }
                 }
@@ -227,12 +245,12 @@ impl SocksChannelCold {
     }
 
     async fn write_loop(
-        mut stream: OwnedWriteHalf, mut rx_channel: mpsc::Receiver<Buffer>,
+        mut stream: OwnedWriteHalf, mut rx_channel: mpsc::Receiver<Vec<u8>>,
         ended: Arc<AtomicBool>,
     ) {
         while !ended.load(Ordering::Relaxed) {
             let Some(data) = rx_channel.recv().await else { return };
-            if stream.write_all(data.read()).await.is_err() {
+            if stream.write_all(&data).await.is_err() {
                 ended.store(true, Ordering::SeqCst);
             }
         }

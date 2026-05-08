@@ -1,8 +1,4 @@
-use crate::{
-    shipment::SpringTank,
-    uid::UniqueId,
-    utils::{Buffer, SocksHost},
-};
+use crate::{shipment::SpringTank, uid::UniqueId, utils::SocksHost};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -14,8 +10,8 @@ pub struct Spring {
     pub id: UniqueId,
     pub host: SocksHost,
     pub port: u16,
-    pub sx: mpsc::Sender<Buffer>,
-    pub rx: mpsc::Receiver<Buffer>,
+    pub sx: mpsc::Sender<Vec<u8>>,
+    pub rx: mpsc::Receiver<Vec<u8>>,
     pub ended: Arc<AtomicBool>,
 }
 
@@ -24,7 +20,7 @@ impl Spring {
         loop {
             match self.rx.try_recv() {
                 Ok(v) => {
-                    data.extend_from_slice(v.read());
+                    data.extend_from_slice(&v);
                 }
                 Err(e) => match e {
                     TryRecvError::Empty => break,
