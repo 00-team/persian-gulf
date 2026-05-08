@@ -7,7 +7,7 @@ use shared::{
     shipment::{BinDencode, Shipment},
     uid::UniqueId,
 };
-use std::sync::atomic::Ordering;
+// use std::sync::atomic::Ordering;
 use std::{collections::HashMap, io::Cursor};
 
 #[post("/bin-batch/")]
@@ -70,53 +70,73 @@ async fn r_bin_batch(body: String, ships: Data<ActiveShips>) -> Horp {
         return Ok(HttpResponse::Ok().body(body));
     }
 
-    let data_collection = std::time::Instant::now();
+    // let data_collection = std::time::Instant::now();
     let mut data_collected_len = 0;
     let mut tanks = HashMap::<UniqueId, SpringTank>::new();
-    loop {
-        if ship.springs.is_empty() {
+    let mut removal = Vec::with_capacity(ship.springs.len());
+    for (sid, s) in ship.springs.iter_mut() {
+        if data_collected_len >= 3 * 1024 * 1024 {
             break;
         }
 
-        let mut removal = Vec::with_capacity(ship.springs.len());
-        for (sid, s) in ship.springs.iter_mut() {
-            if data_collected_len >= 3 * 1024 * 1024 {
-                break;
-            }
-
-            if let Some(tank) = tanks.get_mut(&s.id) {
-                let before = tank.data.len();
-                let ended = s.ended.load(Ordering::Relaxed)
-                    || s.read_data(&mut tank.data).await;
-                data_collected_len += tank.data.len().saturating_sub(before);
-                tank.ended = ended;
-                if ended {
-                    removal.push(*sid);
-                }
-                continue;
-            }
-
-            let tank = s.to_tank().await;
-            let ended = tank.ended;
-            if ended || !tank.data.is_empty() {
-                tanks.insert(tank.id, tank);
-            }
-            if ended {
-                removal.push(*sid);
-            }
+        let tank = s.to_tank().await;
+        let ended = tank.ended;
+        data_collected_len += tank.data.len();
+        if ended || !tank.data.is_empty() {
+            tanks.insert(tank.id, tank);
         }
-        for sid in removal.iter() {
-            ship.springs.remove(sid);
+        if ended {
+            removal.push(*sid);
         }
-
-        if data_collection.elapsed().as_millis() >= 200
-            || data_collected_len >= 3 * 1024 * 1024
-        {
-            break;
-        }
-
-        tokio::time::sleep(std::time::Duration::from_millis(70)).await;
     }
+    for sid in removal.iter() {
+        ship.springs.remove(sid);
+    }
+
+    // loop {
+    //     if ship.springs.is_empty() {
+    //         break;
+    //     }
+    //
+    //     let mut removal = Vec::with_capacity(ship.springs.len());
+    //     for (sid, s) in ship.springs.iter_mut() {
+    //         if data_collected_len >= 3 * 1024 * 1024 {
+    //             break;
+    //         }
+    //
+    //         if let Some(tank) = tanks.get_mut(&s.id) {
+    //             let before = tank.data.len();
+    //             let ended = s.ended.load(Ordering::Relaxed)
+    //                 || s.read_data(&mut tank.data).await;
+    //             data_collected_len += tank.data.len().saturating_sub(before);
+    //             tank.ended = ended;
+    //             if ended {
+    //                 removal.push(*sid);
+    //             }
+    //             continue;
+    //         }
+    //
+    //         let tank = s.to_tank().await;
+    //         let ended = tank.ended;
+    //         if ended || !tank.data.is_empty() {
+    //             tanks.insert(tank.id, tank);
+    //         }
+    //         if ended {
+    //             removal.push(*sid);
+    //         }
+    //     }
+    //     for sid in removal.iter() {
+    //         ship.springs.remove(sid);
+    //     }
+    //
+    //     if data_collection.elapsed().as_millis() >= 200
+    //         || data_collected_len >= 3 * 1024 * 1024
+    //     {
+    //         break;
+    //     }
+    //
+    //     tokio::time::sleep(std::time::Duration::from_millis(70)).await;
+    // }
 
     ship.response_order += 1;
     let response_shipment = Shipment {
