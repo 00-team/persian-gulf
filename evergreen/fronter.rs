@@ -143,10 +143,9 @@ impl ConnectionPool {
 
 pub struct Fronter {
     http_host: &'static str,
-    script_ids: Vec<String>,
+    script_ids: Vec<(String, String)>,
     script_idx: usize,
     dev_available: bool,
-    auth_token: String,
     proxy_url: String,
     // verify_ssl: bool,
     pool: ConnectionPool,
@@ -156,14 +155,13 @@ pub struct Fronter {
 }
 
 impl Fronter {
-    pub fn new() -> Self {
+    pub fn new(alzahra: &str, script_ids: Vec<(String, String)>) -> Self {
         Self {
             http_host: "script.google.com",
-            script_ids: vec!["AKfycbyQoU6ub9jNPnfYqpQksFBHdjVw8MCA_spTAb8FgLgNNRoKvzG7MEcA0y2Xfe1dM3mI".to_string()],
+            script_ids,
             script_idx: 0,
             dev_available: false,
-            auth_token: "F1ilebxCY4vqDYkisjbOgdOf9Sw".to_string(),
-            proxy_url: "http://94.183.183.223:9920/api/proxy/bin-batch/".to_string(),
+            proxy_url: format!("{alzahra}/api/proxy/bin-batch/"),
             // verify_ssl: true,
             // semaphore: Semaphore::new(50),
             // refilling: false,
@@ -174,7 +172,7 @@ impl Fronter {
                     connect_host: "216.239.38.120",
                     sni_host: "www.google.com",
                     tls_config: Arc::new(Self::build_tls_config()),
-                }
+                },
             },
             warmed: false,
         }
@@ -222,14 +220,13 @@ impl Fronter {
         if self.script_idx >= self.script_ids.len() {
             self.script_idx = 0;
         }
-        let sid = &self.script_ids[self.script_idx];
+        let (sid, auth) = &self.script_ids[self.script_idx];
         self.script_idx += 1;
 
         format!(
-            "/macros/s/{sid}/{}?t={}&a={}",
+            "/macros/s/{sid}/{}?t={}&a={auth}",
             if self.dev_available { "dev" } else { "exec" },
             self.proxy_url,
-            self.auth_token
         )
     }
 

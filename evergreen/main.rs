@@ -1,3 +1,4 @@
+use crate::config::Config;
 use crate::socks::SocksChannelCold;
 use base64::Engine;
 use shared::shipment::{BinDencode, SpringTank};
@@ -10,6 +11,7 @@ use std::time::Instant;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
+mod config;
 mod fronter;
 mod socks;
 
@@ -18,15 +20,10 @@ async fn main() -> std::io::Result<()> {
     log::set_logger(&logger::MasterLogger).expect("could not init logger");
     log::set_max_level(log::LevelFilter::Trace);
 
-    // log::info!("res: {res:#?}");
-    // if let Ok(res) = res {
-    //     log::info!("res: {:#?}", res.text().await);
-    // }
-    //
-    // return Ok(());
+    let conf = Config::get();
 
-    let listener = TcpListener::bind("0.0.0.0:6007").await?;
-    log::info!("socks on: 127.0.0.1:6007");
+    let listener = TcpListener::bind(&conf.socks_bind).await?;
+    log::info!("socks on: {}", conf.socks_bind);
 
     let socks_channels =
         Arc::new(Mutex::new(HashMap::<UniqueId, Spring>::with_capacity(200)));
@@ -36,23 +33,6 @@ async fn main() -> std::io::Result<()> {
     // let timeout = std::time::Duration::from_secs(30);
 
     while let Ok((stream, _)) = listener.accept().await {
-        // let Ok(stream) = stream else {
-        //     log::error!("stream error");
-        //     continue;
-        // };
-        // stream.set_read_timeout(Some(timeout)).unwrap();
-        // stream.set_write_timeout(Some(timeout)).unwrap();
-        // let stream = match stream {
-        //     Ok(v) => v,
-        //     Err(e) => match e.kind() {
-        //         io::ErrorKind::WouldBlock => continue,
-        //         _ => {
-        //             log::error!("\x1b[31mERR\x1b[m: stream error: {e:#?}");
-        //             continue;
-        //         }
-        //     },
-        // };
-
         channel_count += 1;
         let scc = match SocksChannelCold::init(stream, channel_count).await {
             Ok(v) => v,
@@ -80,7 +60,9 @@ async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             ),
     );
 
-    let mut fronter = fronter::Fronter::new();
+    let conf = Config::get();
+    let mut fronter =
+        fronter::Fronter::new(&conf.alzahra, conf.script_ids.clone());
 
     // let ship_sleep = std::time::Duration::from_secs(1);
     // let client = reqwest::Client::builder().build().unwrap();
