@@ -145,6 +145,7 @@ impl Ship {
         mut rx_ship: mpsc::Receiver<Vec<u8>>, data: Arc<Mutex<Vec<u8>>>,
     ) {
         while let Some(chunk) = rx_ship.recv().await {
+            log::info!("collecting debt: {}", chunk.len());
             data.lock().await.extend_from_slice(&chunk);
         }
     }
