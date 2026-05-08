@@ -98,13 +98,13 @@ async fn r_bin_batch(body: String, ships: Data<ActiveShips>) -> Horp {
             !ended
         });
 
-        if data_collection.elapsed().as_millis() >= 1500
+        if data_collection.elapsed().as_millis() >= 500
             || data_collected_len >= 30 * 1024 * 1024
         {
             break;
         }
 
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
 
     ship.response_order += 1;

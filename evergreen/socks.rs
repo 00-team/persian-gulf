@@ -150,13 +150,14 @@ impl SocksChannelCold {
         // socks version, command, RSV, ATYP
         let mut req_header = [0u8; 3];
         self.s.read_exact(&mut req_header).await?;
-        log::info!("connect: {req_header:?}");
         if req_header[0] != Self::SOCKS_VERSION || req_header[2] != 0 {
             return Err(EverError::SocksInvalidConnect);
         }
 
         let mut cp = 0u16;
         if req_header[1] == Self::CMD_UDP_CONNECT {
+            return Err(EverError::SocksInvalidConnect);
+
             let mut addr = self.s.local_addr()?;
             addr.set_port(0);
             let udp = UdpSocket::bind(addr).await?;

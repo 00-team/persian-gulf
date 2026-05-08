@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
@@ -49,16 +49,7 @@ async fn main() -> std::io::Result<()> {
 }
 
 async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
-    let ship_id = UniqueId::new(77);
-
-    let b64 = base64::engine::GeneralPurpose::new(
-        &base64::alphabet::STANDARD,
-        base64::engine::GeneralPurposeConfig::new()
-            .with_encode_padding(false)
-            .with_decode_padding_mode(
-                base64::engine::DecodePaddingMode::Indifferent,
-            ),
-    );
+    let mut ship_id = UniqueId::new(77);
 
     let conf = Config::get();
     let mut fronter =
@@ -128,7 +119,7 @@ async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
         };
 
         let body = shipment.to_bytes().await;
-        let b64_encoded = b64.encode(body);
+        let b64_encoded = conf.b64.encode(body);
 
         log::info!(
             "<- {order}: {} | {}",
@@ -136,15 +127,18 @@ async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             b64_encoded.len(),
         );
 
-        let data = match fronter.relay(b64_encoded).await {
-            Ok(v) => v,
-            Err(e) => {
-                log::error!("request error: {e:?}");
-                continue;
-            }
+        let data = loop {
+            match fronter.relay(b64_encoded.clone()).await {
+                Ok(v) => break v,
+                Err(e) => {
+                    log::error!("request error: {e:?}");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+            };
         };
 
-        let Ok(data) = b64.decode(data) else {
+        let Ok(data) = conf.b64.decode(data) else {
             log::error!("invalid base64");
             continue;
         };
@@ -159,6 +153,7 @@ async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
         assert_eq!(shipment.ship_id, ship_id);
 
         if shipment.reset {
+            ship_id = UniqueId::new(99);
             order = 0;
             response_order = 1;
             queued_shipments.clear();
