@@ -88,32 +88,28 @@ impl Ship {
     pub async fn new_channel(&mut self, sch: &SpringTank) {
         let ended = Arc::new(AtomicBool::new(false));
 
-        let (sx_ship, rx_ship) = mpsc::channel::<Vec<u8>>(2048);
+        // let (sx_ship, rx_ship) = mpsc::channel::<Vec<u8>>(2048);
         let (sx_channel, rx_channel) = mpsc::channel::<Vec<u8>>(2048);
 
+        let data = Arc::new(Mutex::new(Vec::new()));
         let runner = Spring {
             id: sch.id,
             host: sch.host.clone(),
             port: sch.port,
             sx: sx_channel,
-            data: Arc::new(Mutex::new(Vec::new())),
+            data: data.clone(),
             // rx: rx_ship,
             ended: ended.clone(),
         };
 
-        tokio::spawn(Self::debt_collector(rx_ship, runner.data.clone()));
+        // tokio::spawn(Self::debt_collector(rx_ship, runner.data.clone()));
         self.springs.insert(sch.id, runner);
 
-        tokio::spawn(Self::run_channel(
-            sch.clone(),
-            sx_ship,
-            rx_channel,
-            ended,
-        ));
+        tokio::spawn(Self::run_channel(sch.clone(), data, rx_channel, ended));
     }
 
     async fn run_channel(
-        sch: SpringTank, sx_ship: mpsc::Sender<Vec<u8>>,
+        sch: SpringTank, data: Arc<Mutex<Vec<u8>>>,
         rx_channel: mpsc::Receiver<Vec<u8>>, ended: Arc<AtomicBool>,
     ) {
         let addr = sch.host.to_addr(sch.port);
@@ -137,21 +133,20 @@ impl Ship {
         };
 
         let (tcp_read, tcp_write) = s.into_split();
-        tokio::spawn(Self::read_loop(tcp_read, sx_ship, ended.clone()));
+        tokio::spawn(Self::read_loop(tcp_read, data, ended.clone()));
         tokio::spawn(Self::write_loop(tcp_write, rx_channel, ended.clone()));
     }
 
-    async fn debt_collector(
-        mut rx_ship: mpsc::Receiver<Vec<u8>>, data: Arc<Mutex<Vec<u8>>>,
-    ) {
-        while let Some(chunk) = rx_ship.recv().await {
-            log::info!("collecting debt: {}", chunk.len());
-            data.lock().await.extend_from_slice(&chunk);
-        }
-    }
+    // async fn debt_collector(
+    //     mut rx_ship: mpsc::Receiver<Vec<u8>>, data: Arc<Mutex<Vec<u8>>>,
+    // ) {
+    //     while let Some(chunk) = rx_ship.recv().await {
+    //         log::info!("collecting debt: {}", chunk.len());
+    //     }
+    // }
 
     async fn read_loop(
-        mut stream: OwnedReadHalf, sx_ship: mpsc::Sender<Vec<u8>>,
+        mut stream: OwnedReadHalf, data: Arc<Mutex<Vec<u8>>>,
         ended: Arc<AtomicBool>,
     ) {
         let mut buf = vec![0u8; 65536];
@@ -162,9 +157,10 @@ impl Ship {
                     break;
                 }
                 Ok(n) => {
-                    if sx_ship.send(buf[..n].to_vec()).await.is_err() {
-                        break;
-                    }
+                    data.lock().await.extend_from_slice(&buf[..n]);
+                    // if sx_ship.send(buf[..n].to_vec()).await.is_err() {
+                    //     break;
+                    // }
                 }
                 Err(_) => {
                     break;
