@@ -48,16 +48,62 @@ async fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
-    let mut ship_id = UniqueId::new(77);
-
+async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
     let conf = Config::get();
-    let mut fronter =
-        fronter::Fronter::new(&conf.alzahra, conf.script_ids.clone());
+    let base_fronter =
+        Arc::new(fronter::Fronter::new(&conf.alzahra, conf.script_ids.clone()));
 
-    let mut order = 0;
-    let mut response_order = 1;
-    let mut queued_shipments = Vec::with_capacity(10);
+    struct State {
+        ship_id: UniqueId,
+        order: u64,
+        response_order: u64,
+        queued_shipments: Vec<Shipment>,
+    }
+
+    impl State {
+        pub fn new() -> Self {
+            Self {
+                ship_id: UniqueId::new(77),
+                order: 0,
+                response_order: 0,
+                queued_shipments: Vec::with_capacity(10),
+            }
+        }
+
+        pub fn reset(&mut self) {
+            self.ship_id = UniqueId::new(44);
+            self.order = 0;
+            self.response_order = 0;
+            self.queued_shipments.clear();
+        }
+
+        pub fn queue(&mut self, shipment: Shipment) -> usize {
+            self.queued_shipments.push(shipment);
+            self.queued_shipments.len()
+        }
+    }
+
+    let base_state = Arc::new(Mutex::new(State::new()));
+
+    async fn apply_shipment(
+        springs: &mut HashMap<UniqueId, Spring>, tanks: Vec<SpringTank>,
+    ) {
+        for tank in tanks {
+            let Some(spring) = springs.get(&tank.id) else { continue };
+
+            if spring.ended.load(Ordering::Relaxed) {
+                continue;
+            }
+
+            if spring.sx.send(tank.data).await.is_err() {
+                spring.ended.store(true, Ordering::Relaxed);
+            }
+
+            if tank.ended {
+                spring.ended.store(true, Ordering::Relaxed);
+            }
+        }
+    }
 
     loop {
         let mut channels = HashMap::<UniqueId, SpringTank>::with_capacity(512);
@@ -66,7 +112,7 @@ async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
         let mut running_springs = 0;
         let mut data_collected_len = 0;
         loop {
-            let mut mg = springs.lock().await;
+            let mut mg = base_springs.lock().await;
             if mg.is_empty() {
                 break;
             }
@@ -95,13 +141,13 @@ async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             });
 
             running_springs = mg.len();
-            if data_collection.elapsed().as_millis() >= 1500
+            if data_collection.elapsed().as_millis() >= 500
                 || data_collected_len >= 30 * 1024 * 1024
             {
                 break;
             }
 
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
         if channels.is_empty() && running_springs == 0 {
@@ -109,87 +155,97 @@ async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             continue;
         }
 
-        order += 1;
-        let shipment = Shipment {
-            ship_id,
-            reset: false,
-            order_request: response_order,
-            order,
-            tanks: channels.into_values().collect(),
-        };
-
-        let body = shipment.to_bytes().await;
-        let b64_encoded = conf.b64.encode(body);
-
-        log::info!(
-            "<- {order}: {} | {}",
-            shipment.tanks.len(),
-            b64_encoded.len(),
-        );
-
-        let data = loop {
-            match fronter.relay(b64_encoded.clone()).await {
-                Ok(v) => break v,
-                Err(e) => {
-                    log::error!("request error: {e:?}");
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    continue;
-                }
+        let mut state = base_state.lock().await;
+        state.order += 1;
+        let (order, ship_id) = (state.order, state.ship_id);
+        let state = base_state.clone();
+        let springs = base_springs.clone();
+        let fronter = base_fronter.clone();
+        tokio::spawn(async move {
+            let shipment = Shipment {
+                ship_id,
+                reset: false,
+                order_request: 0,
+                order,
+                tanks: channels.into_values().collect(),
             };
-        };
 
-        let Ok(data) = conf.b64.decode(data) else {
-            log::error!("invalid base64");
-            continue;
-        };
+            let body = shipment.to_bytes().await;
+            let b64_encoded = conf.b64.encode(body);
 
-        let data_len = data.len();
-        let mut reader = Cursor::new(data);
-        let Ok(shipment) = Shipment::read(&mut reader).await else {
-            log::error!("invalid shipment");
-            continue;
-        };
+            log::info!(
+                "<- \x1b[33m{order}\x1b[m: {} | {}",
+                shipment.tanks.len(),
+                b64_encoded.len(),
+            );
 
-        assert_eq!(shipment.ship_id, ship_id);
+            let data = loop {
+                match fronter.relay(b64_encoded.clone()).await {
+                    Ok(v) => break v,
+                    Err(e) => {
+                        log::error!("request error: {e:?}");
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    }
+                };
+            };
 
-        if shipment.reset {
-            ship_id = UniqueId::new(99);
-            order = 0;
-            response_order = 1;
-            queued_shipments.clear();
-            springs.lock().await.clear();
-            continue;
-        }
+            let Ok(data) = conf.b64.decode(&data) else {
+                log::error!("invalid base64: {data}");
+                return;
+            };
 
-        if shipment.order < response_order {
-            log::error!("response order mismatch");
-            continue;
-        }
+            let data_len = data.len();
+            let mut reader = Cursor::new(data);
+            let Ok(shipment) = Shipment::read(&mut reader).await else {
+                log::error!("invalid shipment");
+                return;
+            };
 
-        if shipment.order > response_order {
-            queued_shipments.push(shipment);
-            log::warn!("queued: {}", queued_shipments.len());
-            continue;
-        }
+            assert_eq!(shipment.ship_id, ship_id);
 
-        log::info!("-> {} | {data_len}", shipment.tanks.len());
-        response_order = shipment.order + 1;
-
-        let springs = springs.lock().await;
-        for tank in shipment.tanks {
-            let Some(spring) = springs.get(&tank.id) else { continue };
-
-            if spring.ended.load(Ordering::Relaxed) {
-                continue;
+            if shipment.reset {
+                state.lock().await.reset();
+                springs.lock().await.clear();
+                return;
             }
 
-            if spring.sx.send(tank.data).await.is_err() {
-                spring.ended.store(true, Ordering::Relaxed);
+            // if shipment.order < response_order {
+            //     state.lock().await.reset();
+            //     springs.lock().await.clear();
+            //     log::error!("response order mismatch: \x1b[31mreset\x1b[m");
+            //     return;
+            // }
+
+            let mut state = state.lock().await;
+            if shipment.order > state.response_order {
+                let q = state.queue(shipment);
+                log::warn!("queued: {q}");
+                return;
             }
 
-            if tank.ended {
-                spring.ended.store(true, Ordering::Relaxed);
+            log::info!(
+                "\x1b[33m{}\x1b[m ->: {} | {data_len}",
+                shipment.order,
+                shipment.tanks.len()
+            );
+
+            state.response_order = shipment.order;
+            let mut springs = springs.lock().await;
+            apply_shipment(&mut springs, shipment.tanks).await;
+
+            state.queued_shipments.sort_by_key(|o| o.order);
+            let queued = state.queued_shipments.clone();
+            let mut queue_prog = 0;
+            for q in queued {
+                if state.response_order + 1 != q.order {
+                    break;
+                }
+                state.response_order = q.order;
+                apply_shipment(&mut springs, q.tanks).await;
+                queue_prog += 1;
             }
-        }
+            state.queued_shipments.drain(0..queue_prog);
+        });
     }
 }

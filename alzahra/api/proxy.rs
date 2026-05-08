@@ -46,7 +46,9 @@ async fn r_bin_batch(body: String, ships: Data<ActiveShips>) -> Horp {
     }
     ship.queued_shipments.drain(0..queue_prog);
 
-    if shipment.order_request <= ship.response_order {
+    if shipment.order_request != 0
+        && shipment.order_request <= ship.response_order
+    {
         let Some(bo) = ship
             .order_backlog
             .iter()

@@ -1,4 +1,11 @@
-use std::{io::Cursor, sync::Arc, time::Duration};
+use std::{
+    io::Cursor,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use reqwest::Url;
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
@@ -54,7 +61,7 @@ impl ConnectionPool {
         Ok((reader, writer))
     }
 
-    fn fill(&mut self, count: usize) {
+    fn fill(&self, count: usize) {
         for _ in 0..count {
             let pool = self.clone();
             tokio::task::spawn(async move {
@@ -63,7 +70,7 @@ impl ConnectionPool {
         }
     }
 
-    async fn maintenance(mut self) {
+    async fn maintenance(self) {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
@@ -99,7 +106,7 @@ impl ConnectionPool {
         }
     }
 
-    async fn acquire(&mut self) -> Result<ActiveConnection, EverError> {
+    async fn acquire(&self) -> Result<ActiveConnection, EverError> {
         {
             let mut pm = self.pool.lock().await;
             while let Some(ac) = pm.pop() {
@@ -132,7 +139,7 @@ impl ConnectionPool {
         })
     }
 
-    pub async fn release(&mut self, ac: ActiveConnection) {
+    pub async fn release(&self, ac: ActiveConnection) {
         if ac.created_at.elapsed().as_secs() > Self::CONN_TTL {
             return;
         }
@@ -144,14 +151,13 @@ impl ConnectionPool {
 pub struct Fronter {
     http_host: &'static str,
     script_ids: Vec<(String, String)>,
-    script_idx: usize,
+    script_idx: Arc<Mutex<usize>>,
     dev_available: bool,
     proxy_url: String,
     // verify_ssl: bool,
     pool: ConnectionPool,
     // semaphore: Semaphore,
-    warmed: bool,
-    // refilling: bool,
+    warmed: Arc<AtomicBool>, // refilling: bool,
 }
 
 impl Fronter {
@@ -159,7 +165,7 @@ impl Fronter {
         Self {
             http_host: "script.google.com",
             script_ids,
-            script_idx: 0,
+            script_idx: Default::default(),
             dev_available: false,
             proxy_url: format!("{alzahra}/api/proxy/bin-batch/"),
             // verify_ssl: true,
@@ -174,12 +180,12 @@ impl Fronter {
                     tls_config: Arc::new(Self::build_tls_config()),
                 },
             },
-            warmed: false,
+            warmed: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    pub async fn relay(&mut self, body: String) -> Result<String, EverError> {
-        if !self.warmed {
+    pub async fn relay(&self, body: String) -> Result<String, EverError> {
+        if !self.warmed.load(Ordering::Relaxed) {
             self.warm_pool().await;
         }
 
@@ -216,12 +222,17 @@ impl Fronter {
         Err(EverError::RequestFailed)
     }
 
-    fn exec_path(&mut self) -> String {
-        if self.script_idx >= self.script_ids.len() {
-            self.script_idx = 0;
-        }
-        let (sid, auth) = &self.script_ids[self.script_idx];
-        self.script_idx += 1;
+    async fn exec_path(&self) -> String {
+        let sdx = {
+            let mut msi = self.script_idx.lock().await;
+            if *msi >= self.script_ids.len() {
+                *msi = 0;
+            }
+            let value = *msi;
+            *msi += 1;
+            value
+        };
+        let (sid, auth) = &self.script_ids[sdx];
 
         format!(
             "/macros/s/{sid}/{}?t={}&a={auth}",
@@ -230,10 +241,8 @@ impl Fronter {
         )
     }
 
-    async fn relay_single(
-        &mut self, payload: String,
-    ) -> Result<String, EverError> {
-        let path = self.exec_path();
+    async fn relay_single(&self, payload: String) -> Result<String, EverError> {
+        let path = self.exec_path().await;
         let mut ac = self.pool.acquire().await?;
 
         let head = format!(
@@ -281,12 +290,12 @@ impl Fronter {
         Ok(body)
     }
 
-    pub async fn warm_pool(&mut self) {
-        if self.warmed {
+    pub async fn warm_pool(&self) {
+        if self.warmed.load(Ordering::Relaxed) {
             return;
         }
 
-        self.warmed = true;
+        self.warmed.store(true, Ordering::SeqCst);
         self.pool.fill(30);
         let pool = self.pool.clone();
         tokio::task::spawn(async move {
@@ -325,7 +334,7 @@ impl Fronter {
     }
 
     async fn read_http_response(
-        &mut self, reader: &mut ConnReader,
+        &self, reader: &mut ConnReader,
     ) -> Result<http::Response<Vec<u8>>, EverError> {
         let mut response = self.read_http_headers(reader).await?;
         Self::read_http_body(&mut response, reader).await?;
