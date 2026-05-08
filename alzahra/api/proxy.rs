@@ -118,6 +118,7 @@ async fn r_bin_batch(body: String, ships: Data<ActiveShips>) -> Horp {
         order: ship.response_order,
     };
 
+    ship.new_backlog(response_shipment.clone());
     let body = response_shipment.to_bytes().await;
     let body = conf.b64.encode(body);
     Ok(HttpResponse::Ok().body(body))

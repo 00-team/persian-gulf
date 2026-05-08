@@ -122,7 +122,7 @@ impl ConnectionPool {
         }
 
         let Ok(Ok((r, w))) = tokio::time::timeout(
-            Duration::from_secs(10),
+            Duration::from_secs(3),
             Self::open(self.info.clone()),
         )
         .await
@@ -209,9 +209,9 @@ impl Fronter {
 
         // self.semaphore.acquire().await
 
-        for _ in 0..50 {
+        for _ in 0..3 {
             let res = tokio::time::timeout(
-                std::time::Duration::from_secs(25),
+                std::time::Duration::from_secs(5),
                 self.relay_single(body.clone()),
             )
             .await;
@@ -354,7 +354,7 @@ impl Fronter {
         loop {
             let mut chunk = vec![0u8; 8192];
             let Ok(Ok(n)) = tokio::time::timeout(
-                Duration::from_secs(8),
+                Duration::from_secs(3),
                 reader.read(&mut chunk),
             )
             .await
@@ -427,7 +427,7 @@ impl Fronter {
 
             while rem > 0 {
                 let Ok(Ok(n)) = tokio::time::timeout(
-                    Duration::from_secs(20),
+                    Duration::from_secs(3),
                     reader.read(&mut data[..(rem.min(65536))]),
                 )
                 .await
@@ -489,7 +489,7 @@ impl Fronter {
                 }
 
                 let Ok(Ok(n)) = tokio::time::timeout(
-                    Duration::from_secs(20),
+                    Duration::from_secs(3),
                     reader.read(&mut data),
                 )
                 .await
@@ -519,7 +519,7 @@ impl Fronter {
             let mut data = vec![0u8; 65536];
             while buf.len() < size + 2 {
                 let Ok(Ok(n)) = tokio::time::timeout(
-                    Duration::from_secs(20),
+                    Duration::from_secs(3),
                     reader.read(&mut data),
                 )
                 .await

@@ -7,9 +7,9 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 
 mod config;
 mod fronter;
@@ -38,7 +38,7 @@ async fn main() -> std::io::Result<()> {
             Ok(v) => v,
             Err(_) => continue,
         };
-        log::debug!("host: {:?}:{}", scc.host, scc.port);
+        // log::debug!("host: {:?}:{}", scc.host, scc.port);
         let spring = scc.run();
         socks_channels.lock().await.insert(spring.id, spring);
     }
@@ -106,6 +106,7 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
     }
 
     let mut tasks = Vec::with_capacity(10);
+    let semaphore = Arc::new(Semaphore::new(5));
 
     'main: loop {
         let mut channels = HashMap::<UniqueId, SpringTank>::with_capacity(512);
@@ -143,7 +144,7 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             });
 
             running_springs = mg.len();
-            if data_collection.elapsed().as_millis() >= 500
+            if data_collection.elapsed().as_millis() >= 1500
                 || data_collected_len >= 30 * 1024 * 1024
             {
                 break;
@@ -157,10 +158,11 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             continue;
         }
 
-        let qlen = base_state.lock().await.queued_shipments.len();
+        let qlen = { base_state.lock().await.queued_shipments.len() };
         if qlen > 7 {
+            log::warn!("\x1b[93mWAITING FOR ALL TASKS\x1b[m");
             for t in tasks {
-                let _ = t.await;
+                let _ = tokio::time::timeout(Duration::from_secs(5), t).await;
             }
             tasks = Vec::with_capacity(10);
         }
@@ -169,53 +171,68 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
         state.queued_shipments.sort_by_key(|o| o.order);
         let mut springs = base_springs.lock().await;
 
-        for q in state.queued_shipments.clone() {
-            for needed in (state.response_order + 1)..q.order {
-                let shipment = Shipment {
-                    ship_id: state.ship_id,
-                    order_request: needed,
-                    reset: false,
-                    order: 0,
-                    tanks: Default::default(),
-                };
+        if state.queued_shipments.len() > 7 {
+            for q in state.queued_shipments.clone() {
+                for needed in (state.response_order + 1)..q.order {
+                    log::warn!("needed: {needed}");
+                    let shipment = Shipment {
+                        ship_id: state.ship_id,
+                        order_request: needed,
+                        reset: false,
+                        order: 0,
+                        tanks: Default::default(),
+                    };
 
-                let bd = conf.b64.encode(shipment.to_bytes().await);
-                let Ok(data) = base_fronter.relay(bd).await else {
-                    state.reset();
-                    springs.clear();
-                    break 'main;
-                };
+                    let bd = conf.b64.encode(shipment.to_bytes().await);
+                    let Ok(data) = base_fronter.relay(bd).await else {
+                        log::error!("request failed. reset");
+                        state.reset();
+                        springs.clear();
+                        continue 'main;
+                    };
 
-                let Ok(data) = conf.b64.decode(&data) else {
-                    log::error!("qp: invalid base64: {data}");
-                    state.reset();
-                    springs.clear();
-                    break 'main;
-                };
+                    let Ok(data) = conf.b64.decode(&data) else {
+                        log::error!("qp: invalid base64: {data}");
+                        state.reset();
+                        springs.clear();
+                        continue 'main;
+                    };
 
-                let mut reader = Cursor::new(data);
-                let Ok(shipment) = Shipment::read(&mut reader).await else {
-                    log::error!("qp: invalid shipment");
-                    state.reset();
-                    springs.clear();
-                    break 'main;
-                };
+                    let mut reader = Cursor::new(data);
+                    let Ok(shipment) = Shipment::read(&mut reader).await else {
+                        log::error!("qp: invalid shipment");
+                        state.reset();
+                        springs.clear();
+                        continue 'main;
+                    };
 
-                state.response_order = shipment.order;
-                apply_shipment(&mut springs, shipment.tanks).await;
+                    assert_eq!(shipment.ship_id, state.ship_id);
+
+                    if shipment.reset {
+                        log::error!("shipment reset require");
+                        state.reset();
+                        springs.clear();
+                        continue 'main;
+                    }
+
+                    state.response_order = shipment.order;
+                    apply_shipment(&mut springs, shipment.tanks).await;
+                }
+
+                state.response_order = q.order;
+                apply_shipment(&mut springs, q.tanks).await;
             }
-
-            state.response_order = q.order;
-            apply_shipment(&mut springs, q.tanks).await;
+            state.queued_shipments.clear();
         }
-        state.queued_shipments.clear();
 
         state.order += 1;
         let (order, ship_id) = (state.order, state.ship_id);
         let state = base_state.clone();
         let springs = base_springs.clone();
         let fronter = base_fronter.clone();
+        let permit = semaphore.clone().acquire_owned().await.unwrap();
         tasks.push(tokio::spawn(async move {
+            let _ = permit;
             let shipment = Shipment {
                 ship_id,
                 reset: false,
