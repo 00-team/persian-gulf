@@ -95,7 +95,7 @@ impl BinDencode for SocksHost {
     }
 }
 
-const _BUF_LEN: usize = 16 * 1024;
+const _BUF_LEN: usize = 2 * 1024;
 
 pub struct Buffer {
     data: [u8; _BUF_LEN],

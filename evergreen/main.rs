@@ -180,6 +180,11 @@ async fn shiper(springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
 
         assert_eq!(shipment.ship_id, ship_id);
 
+        if shipment.reset {
+            springs.lock().await.clear();
+            continue;
+        }
+
         if shipment.order < response_order {
             log::error!("response order mismatch");
             continue;
