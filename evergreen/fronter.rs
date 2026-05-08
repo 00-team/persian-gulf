@@ -331,7 +331,7 @@ impl Fronter {
         loop {
             let mut chunk = vec![0u8; 8192];
             let Ok(Ok(n)) = tokio::time::timeout(
-                Duration::from_secs(3),
+                Duration::from_secs(20),
                 reader.read(&mut chunk),
             )
             .await
@@ -404,7 +404,7 @@ impl Fronter {
 
             while rem > 0 {
                 let Ok(Ok(n)) = tokio::time::timeout(
-                    Duration::from_secs(3),
+                    Duration::from_secs(20),
                     reader.read(&mut data[..(rem.min(65536))]),
                 )
                 .await
@@ -421,7 +421,7 @@ impl Fronter {
             let body = response.body_mut();
             loop {
                 let Ok(Ok(n)) = tokio::time::timeout(
-                    Duration::from_secs(2),
+                    Duration::from_secs(10),
                     reader.read(&mut data),
                 )
                 .await
@@ -466,7 +466,7 @@ impl Fronter {
                 }
 
                 let Ok(Ok(n)) = tokio::time::timeout(
-                    Duration::from_secs(3),
+                    Duration::from_secs(10),
                     reader.read(&mut data),
                 )
                 .await
@@ -496,7 +496,7 @@ impl Fronter {
             let mut data = vec![0u8; 65536];
             while buf.len() < size + 2 {
                 let Ok(Ok(n)) = tokio::time::timeout(
-                    Duration::from_secs(3),
+                    Duration::from_secs(10),
                     reader.read(&mut data),
                 )
                 .await
@@ -515,83 +515,6 @@ impl Fronter {
 
         result
     }
-
-    // ── Decompression helper ──────────────────────────────────────────
-
-    // fn maybe_decompress(headers: &HeaderMap, body: Vec<u8>) -> Vec<u8> {
-    //     if headers
-    //         .get("content-encoding")
-    //         .and_then(|v| v.to_str().ok())
-    //         .map(|s| s.eq_ignore_ascii_case("gzip"))
-    //         .unwrap_or(false)
-    //     {
-    //         let mut decoder = GzDecoder::new(&body[..]);
-    //         let mut decompressed = Vec::new();
-    //         if std::io::Read::read_to_end(&mut decoder, &mut decompressed).is_ok() {
-    //             return decompressed;
-    //         }
-    //     }
-    //     body
-    // }
-
-    //     """Read one HTTP response. Keep-alive safe (no read-until-EOF)."""
-    //     raw = b""
-    //     while b"\r\n\r\n" not in raw:
-    //         chunk = await asyncio.wait_for(reader.read(8192), timeout=8)
-    //         if not chunk:
-    //             break
-    //         raw += chunk
-    //
-    //     if b"\r\n\r\n" not in raw:
-    //         return 0, {}, b""
-    //
-    //     header_section, body = raw.split(b"\r\n\r\n", 1)
-    //     lines = header_section.split(b"\r\n")
-    //
-    //     status_line = lines[0].decode(errors="replace")
-    //     m = re.search(r"\d{3}", status_line)
-    //     status = int(m.group()) if m else 0
-    //
-    //     headers = {}
-    //     for line in lines[1:]:
-    //         if b":" in line:
-    //             k, v = line.decode(errors="replace").split(":", 1)
-    //             headers[k.strip().lower()] = v.strip()
-    //
-    //     content_length = headers.get("content-length")
-    //     transfer_encoding = headers.get("transfer-encoding", "")
-    //
-    //     if "chunked" in transfer_encoding:
-    //         body = await self._read_chunked(reader, body)
-    //     elif content_length:
-    //         remaining = int(content_length) - len(body)
-    //         while remaining > 0:
-    //             chunk = await asyncio.wait_for(
-    //                 reader.read(min(remaining, 65536)), timeout=20
-    //             )
-    //             if not chunk:
-    //                 break
-    //             body += chunk
-    //             remaining -= len(chunk)
-    //     else:
-    //         # No framing — short timeout read (keep-alive safe)
-    //         while True:
-    //             try:
-    //                 chunk = await asyncio.wait_for(reader.read(65536), timeout=2)
-    //                 if not chunk:
-    //                     break
-    //                 body += chunk
-    //             except asyncio.TimeoutError:
-    //                 break
-    //
-    //     # Auto-decompress gzip from Google frontend
-    //     if headers.get("content-encoding", "").lower() == "gzip":
-    //         try:
-    //             body = gzip.decompress(body)
-    //         except Exception:
-    //             pass  # not actually gzip, use as-is
-    //
-    //     return status, headers, body
 }
 
 /*

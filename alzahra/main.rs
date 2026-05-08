@@ -128,6 +128,11 @@ impl Ship {
             ended.store(true, Ordering::SeqCst);
             return;
         }
+        if s.flush().await.is_err() {
+            log::warn!("flush failed");
+            ended.store(true, Ordering::SeqCst);
+            return;
+        };
 
         let (tcp_read, tcp_write) = s.into_split();
         tokio::spawn(Self::read_loop(tcp_read, sx_ship, ended.clone()));
@@ -146,7 +151,6 @@ impl Ship {
                     break;
                 }
                 Ok(n) => {
-                    log::info!("capacity: {}", sx_ship.capacity());
                     if sx_ship.send(buf[..n].to_vec()).await.is_err() {
                         break;
                     }

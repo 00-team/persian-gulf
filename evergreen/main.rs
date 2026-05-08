@@ -142,7 +142,7 @@ async fn shiper(
             }
 
             mg.retain(|_, s| {
-                if data_collected_len >= 30 * 1024 * 1024 {
+                if data_collected_len >= 3 * 1024 * 1024 {
                     return true;
                 }
 
@@ -165,13 +165,13 @@ async fn shiper(
             });
 
             running_springs = mg.len();
-            if data_collection.elapsed().as_millis() >= 1000
-                || data_collected_len >= 30 * 1024 * 1024
+            if data_collection.elapsed().as_millis() >= 3_000
+                || data_collected_len >= 3 * 1024 * 1024
             {
                 break;
             }
 
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
 
         if channels.is_empty() && running_springs == 0 {
@@ -183,8 +183,7 @@ async fn shiper(
         if qlen > 7 {
             log::warn!("\x1b[93mWAITING FOR ALL TASKS\x1b[m");
             for t in tasks {
-                t.await;
-                // let _ = tokio::time::timeout(Duration::from_secs(5), t).await;
+                let _ = tokio::time::timeout(Duration::from_secs(35), t).await;
             }
             tasks = Vec::with_capacity(10);
         }

@@ -79,7 +79,7 @@ async fn r_bin_batch(body: String, ships: Data<ActiveShips>) -> Horp {
         }
 
         ship.springs.retain(|_, s| {
-            if data_collected_len >= 30 * 1024 * 1024 {
+            if data_collected_len >= 3 * 1024 * 1024 {
                 return true;
             }
 
@@ -100,13 +100,13 @@ async fn r_bin_batch(body: String, ships: Data<ActiveShips>) -> Horp {
             !ended
         });
 
-        if data_collection.elapsed().as_millis() >= 500
-            || data_collected_len >= 30 * 1024 * 1024
+        if data_collection.elapsed().as_millis() >= 700
+            || data_collected_len >= 3 * 1024 * 1024
         {
             break;
         }
 
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(70)).await;
     }
 
     ship.response_order += 1;
