@@ -35,6 +35,7 @@ async fn main() -> std::io::Result<()> {
         ));
         let h_shiper = tokio::task::spawn(shiper(sps.clone(), az.clone()));
         az_springs.push((h_shiper, sps));
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
     // let timeout = std::time::Duration::from_secs(30);
@@ -66,6 +67,7 @@ async fn main() -> std::io::Result<()> {
 async fn shiper(
     base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>, alzahra: String,
 ) {
+    let name = alzahra[7..15].to_string();
     let conf = Config::get();
     let base_fronter =
         Arc::new(fronter::Fronter::new(&alzahra, conf.script_ids.clone()));
@@ -130,11 +132,14 @@ async fn shiper(
     let semaphore = Arc::new(Semaphore::new(5));
 
     'main: loop {
+        tokio::time::sleep(Duration::from_millis(rand::random_range(10..500)))
+            .await;
         let mut channels = HashMap::<UniqueId, SpringTank>::with_capacity(512);
 
         let data_collection = Instant::now();
         let mut running_springs = 0;
         let mut data_collected_len = 0;
+
         loop {
             let mut mg = base_springs.lock().await;
             if mg.is_empty() {
@@ -267,6 +272,7 @@ async fn shiper(
         let springs = base_springs.clone();
         let fronter = base_fronter.clone();
         let permit = semaphore.clone().acquire_owned().await.unwrap();
+        let name = name.clone();
         tasks.push(tokio::spawn(async move {
             let _ = permit;
             let shipment = Shipment {
@@ -340,7 +346,7 @@ async fn shiper(
             }
 
             log::info!(
-                "\x1b[33m{:<3}\x1b[m ->: {:3} |{data_len:7}|",
+                "\x1b[33m{:<3}\x1b[m ->: {:3} |{data_len:7}| {name}",
                 shipment.order,
                 shipment.tanks.len()
             );
