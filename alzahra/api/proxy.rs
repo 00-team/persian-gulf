@@ -100,7 +100,7 @@ async fn r_bin_batch(body: String, ships: Data<ActiveShips>) -> Horp {
             !ended
         });
 
-        if data_collection.elapsed().as_millis() >= 700
+        if data_collection.elapsed().as_millis() >= 200
             || data_collected_len >= 3 * 1024 * 1024
         {
             break;
