@@ -58,6 +58,7 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
         order: u64,
         response_order: u64,
         queued_shipments: Vec<Shipment>,
+        cycle: u64,
     }
 
     impl State {
@@ -66,6 +67,7 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
                 ship_id: UniqueId::new(77),
                 order: 0,
                 response_order: 0,
+                cycle: 0,
                 queued_shipments: Vec::with_capacity(10),
             }
         }
@@ -75,6 +77,7 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             self.order = 0;
             self.response_order = 0;
             self.queued_shipments.clear();
+            self.cycle = self.cycle.wrapping_add(1);
         }
 
         pub fn queue(&mut self, shipment: Shipment) -> usize {
@@ -188,6 +191,7 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
                         log::error!("request failed. reset");
                         state.reset();
                         springs.clear();
+                        tasks.clear();
                         continue 'main;
                     };
 
@@ -195,6 +199,7 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
                         log::error!("qp: invalid base64: {data}");
                         state.reset();
                         springs.clear();
+                        tasks.clear();
                         continue 'main;
                     };
 
@@ -203,6 +208,7 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
                         log::error!("qp: invalid shipment");
                         state.reset();
                         springs.clear();
+                        tasks.clear();
                         continue 'main;
                     };
 
@@ -212,6 +218,7 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
                         log::error!("shipment reset require");
                         state.reset();
                         springs.clear();
+                        tasks.clear();
                         continue 'main;
                     }
 
@@ -226,7 +233,7 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
         }
 
         state.order += 1;
-        let (order, ship_id) = (state.order, state.ship_id);
+        let (order, ship_id, cycle) = (state.order, state.ship_id, state.cycle);
         let state = base_state.clone();
         let springs = base_springs.clone();
         let fronter = base_fronter.clone();
@@ -251,8 +258,11 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             );
 
             let Ok(data) = fronter.relay(b64_encoded).await else {
-                state.lock().await.reset();
-                springs.lock().await.clear();
+                let mut state = state.lock().await;
+                if state.cycle == cycle {
+                    state.reset();
+                    springs.lock().await.clear();
+                }
                 return;
             };
 
@@ -271,8 +281,11 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             assert_eq!(shipment.ship_id, ship_id);
 
             if shipment.reset {
-                state.lock().await.reset();
-                springs.lock().await.clear();
+                let mut state = state.lock().await;
+                if state.cycle == cycle {
+                    state.reset();
+                    springs.lock().await.clear();
+                }
                 return;
             }
 
@@ -284,6 +297,9 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             // }
 
             let mut state = state.lock().await;
+            if state.cycle != cycle {
+                return;
+            }
             if shipment.order > state.response_order + 1 {
                 let so = shipment.order;
                 let q = state.queue(shipment);
