@@ -205,8 +205,9 @@ async fn shiper(
                     };
 
                     let bd = conf.b64.encode(shipment.to_bytes().await);
+                    let bd_len = bd.len();
                     let Ok(data) = base_fronter.relay(bd).await else {
-                        log::error!("request failed. reset");
+                        log::error!("qp: request failed. reset: {bd_len}");
                         state.reset();
                         springs.clear();
                         tasks.clear();

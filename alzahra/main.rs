@@ -54,7 +54,7 @@ impl Ship {
         self.order_backlog.push(sm);
         self.order_backlog.sort_by_key(|o| o.order);
 
-        if self.order_backlog.len() > 30 {
+        if self.order_backlog.len() > 50 {
             self.order_backlog.remove(0);
         }
     }

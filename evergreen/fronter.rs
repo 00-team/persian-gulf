@@ -212,9 +212,9 @@ impl Fronter {
 
         // self.semaphore.acquire().await
 
-        for _ in 0..5 {
+        for _ in 0..7 {
             let res = tokio::time::timeout(
-                std::time::Duration::from_secs(15),
+                std::time::Duration::from_secs(25),
                 self.relay_single(body.clone()),
             )
             .await;
