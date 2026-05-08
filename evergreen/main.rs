@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
@@ -105,7 +105,9 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
         }
     }
 
-    loop {
+    let mut tasks = Vec::with_capacity(10);
+
+    'main: loop {
         let mut channels = HashMap::<UniqueId, SpringTank>::with_capacity(512);
 
         let data_collection = Instant::now();
@@ -155,13 +157,65 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             continue;
         }
 
+        let qlen = base_state.lock().await.queued_shipments.len();
+        if qlen > 7 {
+            for t in tasks {
+                let _ = t.await;
+            }
+            tasks = Vec::with_capacity(10);
+        }
+
         let mut state = base_state.lock().await;
+        state.queued_shipments.sort_by_key(|o| o.order);
+        let mut springs = base_springs.lock().await;
+
+        for q in state.queued_shipments.clone() {
+            for needed in (state.response_order + 1)..q.order {
+                let shipment = Shipment {
+                    ship_id: state.ship_id,
+                    order_request: needed,
+                    reset: false,
+                    order: 0,
+                    tanks: Default::default(),
+                };
+
+                let bd = conf.b64.encode(shipment.to_bytes().await);
+                let Ok(data) = base_fronter.relay(bd).await else {
+                    state.reset();
+                    springs.clear();
+                    break 'main;
+                };
+
+                let Ok(data) = conf.b64.decode(&data) else {
+                    log::error!("qp: invalid base64: {data}");
+                    state.reset();
+                    springs.clear();
+                    break 'main;
+                };
+
+                let mut reader = Cursor::new(data);
+                let Ok(shipment) = Shipment::read(&mut reader).await else {
+                    log::error!("qp: invalid shipment");
+                    state.reset();
+                    springs.clear();
+                    break 'main;
+                };
+
+                state.response_order = shipment.order;
+                apply_shipment(&mut springs, shipment.tanks).await;
+            }
+
+            state.response_order = q.order;
+            apply_shipment(&mut springs, q.tanks).await;
+        }
+        state.queued_shipments.clear();
+
         state.order += 1;
         let (order, ship_id) = (state.order, state.ship_id);
         let state = base_state.clone();
         let springs = base_springs.clone();
         let fronter = base_fronter.clone();
-        tokio::spawn(async move {
+        tasks.push(tokio::spawn(async move {
             let shipment = Shipment {
                 ship_id,
                 reset: false,
@@ -179,15 +233,10 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
                 b64_encoded.len(),
             );
 
-            let data = loop {
-                match fronter.relay(b64_encoded.clone()).await {
-                    Ok(v) => break v,
-                    Err(e) => {
-                        log::error!("request error: {e:?}");
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        continue;
-                    }
-                };
+            let Ok(data) = fronter.relay(b64_encoded).await else {
+                state.lock().await.reset();
+                springs.lock().await.clear();
+                return;
             };
 
             let Ok(data) = conf.b64.decode(&data) else {
@@ -218,9 +267,11 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
             // }
 
             let mut state = state.lock().await;
-            if shipment.order > state.response_order {
+            if shipment.order > state.response_order + 1 {
+                let so = shipment.order;
                 let q = state.queue(shipment);
-                log::warn!("queued: {q}");
+                log::warn!("queued: {q} | {so} > {}", state.response_order + 1);
+
                 return;
             }
 
@@ -246,6 +297,6 @@ async fn shiper(base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>) {
                 queue_prog += 1;
             }
             state.queued_shipments.drain(0..queue_prog);
-        });
+        }));
     }
 }
