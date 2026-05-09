@@ -11,14 +11,14 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 
-use crate::config::Config;
+// use crate::config::Config;
 
 #[derive(Debug)]
 pub enum EverError {
     SocksVersionMismatch,
     SocksNoAcceptableMethod,
     SocksAuthRequired,
-    SocksBadAuth,
+    // SocksBadAuth,
     SocksInvalidConnect,
     // SocksUnsupportedAddress,
     InvalidDnsNameError,
@@ -62,9 +62,9 @@ impl SocksChannelCold {
     const METHOD_NO_AUTH: u8 = 0x00;
     const METHOD_USER_PASS: u8 = 0x02;
 
-    const AUTH_VERSION: u8 = 0x01;
-    const AUTH_SUCCESS: u8 = 0x00;
-    const AUTH_FAILURE: u8 = 0x01;
+    // const AUTH_VERSION: u8 = 0x01;
+    // const AUTH_SUCCESS: u8 = 0x00;
+    // const AUTH_FAILURE: u8 = 0x01;
 
     pub async fn init(
         stream: TcpStream, index: u64,
@@ -89,6 +89,7 @@ impl SocksChannelCold {
         let mut header = [0u8; 2];
         self.s.read_exact(&mut header).await?;
         if header[0] != Self::SOCKS_VERSION {
+            log::error!("invalid version");
             return Err(EverError::SocksVersionMismatch);
         }
 
@@ -108,44 +109,47 @@ impl SocksChannelCold {
             return Err(EverError::SocksNoAcceptableMethod);
         }
 
-        self.s
-            .write_all(&[Self::SOCKS_VERSION, Self::METHOD_USER_PASS])
-            .await?;
 
-        // auth method, username len
-        let mut auth_header = [0u8; 2];
-        self.s.read_exact(&mut auth_header).await?;
+        // TODO: for some reason when auth is required only some connections
+        // work. and after some times they die
+        Err(EverError::SocksAuthRequired)
 
-        if auth_header[0] != Self::AUTH_VERSION {
-            return Err(EverError::SocksAuthRequired);
-        }
-
-        let ulen = auth_header[1] as usize;
-        let mut username = [0u8; 255];
-        self.s.read_exact(&mut username[..ulen]).await?;
-
-        let mut plen_buf = [0u8; 1];
-        self.s.read_exact(&mut plen_buf).await?;
-        let plen = plen_buf[0] as usize;
-
-        let mut password = [0u8; 255];
-        self.s.read_exact(&mut password[..plen]).await?;
-
-        let user = str::from_utf8(&username[..ulen]).unwrap_or("");
-        let pass = str::from_utf8(&password[..plen]).unwrap_or("");
-
-        let conf = Config::get();
-        if !conf.users.get(user).map(|p| p == pass).unwrap_or(false) {
-            self.s.write_all(&[Self::AUTH_VERSION, Self::AUTH_FAILURE]).await?;
-            log::warn!("invalid password for user: {user}");
-            return Err(EverError::SocksBadAuth);
-        }
-
-        self.user = Some(user.to_string());
-        log::debug!("user: {user} | pass: {pass}",);
-        self.s.write_all(&[Self::AUTH_VERSION, Self::AUTH_SUCCESS]).await?;
-
-        Ok(())
+        // self.s
+        //     .write_all(&[Self::SOCKS_VERSION, Self::METHOD_USER_PASS])
+        //     .await?;
+        //
+        // // auth method, username len
+        // let mut auth_header = [0u8; 2];
+        // self.s.read_exact(&mut auth_header).await?;
+        //
+        // if auth_header[0] != Self::AUTH_VERSION {
+        //     return Err(EverError::SocksAuthRequired);
+        // }
+        //
+        // let ulen = auth_header[1] as usize;
+        // let mut username = [0u8; 255];
+        // self.s.read_exact(&mut username[..ulen]).await?;
+        //
+        // let mut plen_buf = [0u8; 1];
+        // self.s.read_exact(&mut plen_buf).await?;
+        // let plen = plen_buf[0] as usize;
+        //
+        // let mut password = [0u8; 255];
+        // self.s.read_exact(&mut password[..plen]).await?;
+        //
+        // let user = str::from_utf8(&username[..ulen]).unwrap_or("");
+        // let pass = str::from_utf8(&password[..plen]).unwrap_or("");
+        //
+        // let conf = Config::get();
+        // if !conf.users.get(user).map(|p| p == pass).unwrap_or(false) {
+        //     self.s.write_all(&[Self::AUTH_VERSION, Self::AUTH_FAILURE]).await?;
+        //     log::warn!("invalid password for user: {user}");
+        //     return Err(EverError::SocksBadAuth);
+        // }
+        //
+        // self.user = Some(user.to_string());
+        // self.s.write_all(&[Self::AUTH_VERSION, Self::AUTH_SUCCESS]).await?;
+        // Ok(())
     }
 
     async fn target(&mut self) -> Result<(), EverError> {

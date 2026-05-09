@@ -7,6 +7,7 @@ use actix_web::{
 use shared::shipment::{Shipment, SpringTank};
 use shared::spring::Spring;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use std::{
     collections::HashMap,
     sync::{Arc, atomic::AtomicBool},
@@ -153,6 +154,11 @@ impl Ship {
         let mut buf = vec![0u8; 65536];
 
         while !ended.load(Ordering::Relaxed) {
+            if data.lock().await.len() > 50 * 1024 * 1024 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+
             match stream.read(&mut buf).await {
                 Ok(0) => {
                     break;

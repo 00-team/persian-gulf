@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, Semaphore};
 
@@ -35,7 +35,7 @@ async fn main() -> std::io::Result<()> {
         ));
         let h_shiper = tokio::task::spawn(shiper(sps.clone(), az.clone()));
         az_springs.push((h_shiper, sps));
-        tokio::time::sleep(Duration::from_millis(1200)).await;
+        tokio::time::sleep(Duration::from_millis(1000)).await;
     }
 
     // let timeout = std::time::Duration::from_secs(30);
@@ -130,9 +130,10 @@ async fn shiper(
 
     let mut tasks = Vec::with_capacity(10);
     let semaphore = Arc::new(Semaphore::new(5));
+    let mut skiped = 0;
 
     'main: loop {
-        tokio::time::sleep(Duration::from_millis(3000)).await;
+        tokio::time::sleep(Duration::from_millis(3500)).await;
         let mut tanks = HashMap::<UniqueId, SpringTank>::with_capacity(512);
 
         let running_springs = {
@@ -161,10 +162,12 @@ async fn shiper(
             mg.len()
         };
 
-        if tanks.is_empty() && running_springs == 0 {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        if tanks.is_empty() && skiped < 3 {
+            log::debug!("skiped");
+            skiped += 1;
             continue;
         }
+        skiped = 0;
 
         let qlen = { base_state.lock().await.queued_shipments.len() };
         if qlen > 7 {
@@ -264,6 +267,7 @@ async fn shiper(
                 b64_encoded.len(),
             );
 
+            let start = Instant::now();
             let Ok(data) = fronter.relay(b64_encoded).await else {
                 let mut state = state.lock().await;
                 if state.cycle == cycle {
@@ -273,6 +277,7 @@ async fn shiper(
                 }
                 return;
             };
+            let elapsed = start.elapsed();
 
             let Ok(data) = conf.b64.decode(&data) else {
                 log::error!("invalid base64: {data}");
@@ -318,9 +323,10 @@ async fn shiper(
             }
 
             log::info!(
-                "\x1b[33m{:<3}\x1b[m ->: {:3}/{running_springs:<3} |{data_len:7}| {name}",
+                "\x1b[33m{:<3}\x1b[m ->: {:3}/{running_springs:<3} |{data_len:7}| {name} {:.2}",
                 shipment.order,
-                shipment.tanks.len()
+                shipment.tanks.len(),
+                elapsed.as_secs_f32()
             );
 
             state.response_order = shipment.order;
