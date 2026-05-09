@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, Semaphore};
 
@@ -132,64 +132,39 @@ async fn shiper(
     let semaphore = Arc::new(Semaphore::new(5));
 
     'main: loop {
-        tokio::time::sleep(Duration::from_millis(rand::random_range(10..500)))
-            .await;
-        let mut channels = HashMap::<UniqueId, SpringTank>::with_capacity(512);
+        tokio::time::sleep(Duration::from_millis(rand::random_range(
+            2500..4000,
+        )))
+        .await;
+        let mut tanks = HashMap::<UniqueId, SpringTank>::with_capacity(512);
 
-        let data_collection = Instant::now();
-        let mut running_springs = 0;
-        let mut data_collected_len = 0;
-
-        loop {
+        let running_springs = {
             let mut mg = base_springs.lock().await;
-            if mg.is_empty() {
-                break;
-            }
-
             let mut removal = Vec::with_capacity(mg.len());
+            let mut data_collected_len = 0;
             for (sid, s) in mg.iter_mut() {
-                if data_collected_len >= 3 * 1024 * 1024 {
+                if data_collected_len >= 5 * 1024 * 1024 {
                     break;
-                }
-
-                if let Some(ch) = channels.get_mut(&s.id) {
-                    let before = ch.data.len();
-                    let ended = s.ended.load(Ordering::Relaxed)
-                        || s.read_data(&mut ch.data).await;
-                    data_collected_len += ch.data.len().saturating_sub(before);
-                    ch.ended = ended;
-                    if ended {
-                        removal.push(*sid);
-                    }
-                    continue;
                 }
 
                 let tank = s.to_tank().await;
                 data_collected_len += tank.data.len();
                 let ended = tank.ended;
                 if ended || !tank.data.is_empty() {
-                    channels.insert(s.id, tank);
+                    tanks.insert(s.id, tank);
                 }
                 if ended {
                     removal.push(*sid);
                 }
             }
-
             for sid in removal.iter() {
                 mg.remove(sid);
             }
 
-            running_springs = mg.len();
-            if data_collection.elapsed().as_millis() >= 3_000
-                || data_collected_len >= 3 * 1024 * 1024
-            {
-                break;
-            }
+            mg.len()
+        };
 
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        }
-
-        if channels.is_empty() && running_springs == 0 {
+        if tanks.is_empty() && running_springs == 0 {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             continue;
         }
@@ -280,7 +255,7 @@ async fn shiper(
                 reset: false,
                 order_request: 0,
                 order,
-                tanks: channels.into_values().collect(),
+                tanks: tanks.into_values().collect(),
             };
 
             let body = shipment.to_bytes().await;

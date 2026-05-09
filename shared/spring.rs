@@ -1,10 +1,10 @@
 use crate::{shipment::SpringTank, uid::UniqueId, utils::SocksHost};
-use tokio::sync::Mutex;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-use tokio::sync::mpsc::{self, error::TryRecvError};
+use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 
 #[derive(Debug)]
 pub struct Spring {
