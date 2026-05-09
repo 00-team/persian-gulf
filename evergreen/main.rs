@@ -67,7 +67,7 @@ async fn main() -> std::io::Result<()> {
 async fn shiper(
     base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>, alzahra: String,
 ) {
-    let name = alzahra[7..15].to_string();
+    let name = alzahra[7..10].to_string();
     let conf = Config::get();
     let base_fronter =
         Arc::new(fronter::Fronter::new(&alzahra, conf.script_ids.clone()));
@@ -287,7 +287,7 @@ async fn shiper(
             let b64_encoded = conf.b64.encode(body);
 
             log::info!(
-                "<- \x1b[33m{order:3}\x1b[m: {:3} |{:7}|",
+                "<- \x1b[33m{order:3}\x1b[m: {:3}/{running_springs:<3} |{:7}|",
                 shipment.tanks.len(),
                 b64_encoded.len(),
             );
@@ -346,7 +346,7 @@ async fn shiper(
             }
 
             log::info!(
-                "\x1b[33m{:<3}\x1b[m ->: {:3} |{data_len:7}| {name}",
+                "\x1b[33m{:<3}\x1b[m ->: {:3}/{running_springs:<3} |{data_len:7}| {name}",
                 shipment.order,
                 shipment.tanks.len()
             );
