@@ -20,8 +20,11 @@ pub struct Spring {
 impl Spring {
     pub async fn read_data(&mut self, data: &mut Vec<u8>) -> bool {
         let mut dt = self.data.lock().await;
-        data.extend_from_slice(&dt);
-        dt.clear();
+        let len = dt.len();
+        let max_read = len.min(5 * 1024 * 1024);
+        data.extend_from_slice(&dt[..max_read]);
+        dt.copy_within(max_read.., 0);
+        dt.truncate(len - max_read);
         // loop {
         //     match self.rx.try_recv() {
         //         Ok(v) => {
@@ -38,7 +41,7 @@ impl Spring {
     }
 
     pub async fn to_tank(&mut self) -> SpringTank {
-        let mut data = Vec::with_capacity(100 * 1024);
+        let mut data = Vec::with_capacity(500 * 1024);
         let mut ended = self.ended.load(Ordering::Relaxed);
 
         ended = ended || self.read_data(&mut data).await;

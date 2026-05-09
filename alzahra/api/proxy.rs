@@ -75,7 +75,7 @@ async fn r_bin_batch(body: String, ships: Data<ActiveShips>) -> Horp {
     let mut tanks = HashMap::<UniqueId, SpringTank>::new();
     let mut removal = Vec::with_capacity(ship.springs.len());
     for (sid, s) in ship.springs.iter_mut() {
-        if data_collected_len >= 3 * 1024 * 1024 {
+        if data_collected_len >= 7 * 1024 * 1024 {
             break;
         }
 
