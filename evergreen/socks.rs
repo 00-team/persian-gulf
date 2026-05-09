@@ -51,6 +51,7 @@ pub struct SocksChannelCold {
     pub host: SocksHost,
     pub port: u16,
     udp: Option<UdpSocket>,
+    user: Option<String>,
 }
 
 impl SocksChannelCold {
@@ -74,6 +75,7 @@ impl SocksChannelCold {
             host: SocksHost::Ipv4([0; 4]),
             port: 0,
             udp: None,
+            user: None,
         };
 
         sc.handshake().await?;
@@ -135,9 +137,11 @@ impl SocksChannelCold {
         let conf = Config::get();
         if !conf.users.get(user).map(|p| p == pass).unwrap_or(false) {
             self.s.write_all(&[Self::AUTH_VERSION, Self::AUTH_FAILURE]).await?;
+            log::warn!("invalid password for user: {user}");
             return Err(EverError::SocksBadAuth);
         }
 
+        self.user = Some(user.to_string());
         log::debug!("user: {user} | pass: {pass}",);
         self.s.write_all(&[Self::AUTH_VERSION, Self::AUTH_SUCCESS]).await?;
 
@@ -152,15 +156,15 @@ impl SocksChannelCold {
             return Err(EverError::SocksInvalidConnect);
         }
 
-        let mut cp = 0u16;
+        let cp = 0u16;
         if req_header[1] == Self::CMD_UDP_CONNECT {
             return Err(EverError::SocksInvalidConnect);
 
-            let mut addr = self.s.local_addr()?;
-            addr.set_port(0);
-            let udp = UdpSocket::bind(addr).await?;
-            cp = udp.local_addr()?.port();
-            self.udp = Some(udp);
+            // let mut addr = self.s.local_addr()?;
+            // addr.set_port(0);
+            // let udp = UdpSocket::bind(addr).await?;
+            // cp = udp.local_addr()?.port();
+            // self.udp = Some(udp);
         } else if req_header[1] == Self::CMD_CONNECT {
         } else {
             return Err(EverError::SocksInvalidConnect);
@@ -208,6 +212,7 @@ impl SocksChannelCold {
             sx: sx_channel,
             data: Arc::new(Mutex::new(Vec::new())),
             ended: ended.clone(),
+            user: self.user,
         };
 
         tokio::spawn(Self::debt_collector(rx_alzahra, runner.data.clone()));

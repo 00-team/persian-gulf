@@ -35,7 +35,7 @@ async fn main() -> std::io::Result<()> {
         ));
         let h_shiper = tokio::task::spawn(shiper(sps.clone(), az.clone()));
         az_springs.push((h_shiper, sps));
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_millis(1200)).await;
     }
 
     // let timeout = std::time::Duration::from_secs(30);
@@ -132,10 +132,7 @@ async fn shiper(
     let semaphore = Arc::new(Semaphore::new(5));
 
     'main: loop {
-        tokio::time::sleep(Duration::from_millis(rand::random_range(
-            2500..4000,
-        )))
-        .await;
+        tokio::time::sleep(Duration::from_millis(3000)).await;
         let mut tanks = HashMap::<UniqueId, SpringTank>::with_capacity(512);
 
         let running_springs = {

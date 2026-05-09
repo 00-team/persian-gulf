@@ -100,6 +100,7 @@ impl Ship {
             data: data.clone(),
             // rx: rx_ship,
             ended: ended.clone(),
+            user: None,
         };
 
         // tokio::spawn(Self::debt_collector(rx_ship, runner.data.clone()));

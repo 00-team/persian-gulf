@@ -15,6 +15,7 @@ pub struct Spring {
     // pub rx: mpsc::Receiver<Vec<u8>>,
     pub data: Arc<Mutex<Vec<u8>>>,
     pub ended: Arc<AtomicBool>,
+    pub user: Option<String>,
 }
 
 impl Spring {
