@@ -1,4 +1,4 @@
-use std::sync::{Arc, OnceLock};
+use std::{collections::HashMap, sync::{Arc, OnceLock}};
 
 use rustls::{ClientConfig, RootCertStore};
 
@@ -10,6 +10,13 @@ mod tom {
         pub proxy: String,
         pub script_ids: Vec<(String, String)>,
         pub alzahra: Vec<String>,
+        pub users: Vec<UserPass>,
+    }
+
+    #[derive(Debug, serde::Deserialize, serde::Serialize)]
+    pub struct UserPass {
+        pub user: String,
+        pub pass: String,
     }
 
     impl ConfigToml {
@@ -21,6 +28,10 @@ mod tom {
                     "your google script ids".to_string(),
                     "this scripts auth token".to_string(),
                 )],
+                users: vec![UserPass {
+                    user: "user".to_string(),
+                    pass: "pass".to_string(),
+                }],
             }
         }
     }
@@ -69,6 +80,7 @@ pub struct Config {
     pub script_ids: Vec<(String, String)>,
     pub alzahra: Vec<String>,
     pub tls: Arc<ClientConfig>,
+    pub users: HashMap<String, String>,
 }
 
 impl Config {
@@ -80,8 +92,13 @@ impl Config {
 
     fn init() -> Self {
         let ct = tom::get();
+        let mut users = HashMap::with_capacity(ct.users.len());
+        for up in ct.users {
+            users.insert(up.user, up.pass);
+        }
 
         Self {
+            users,
             socks_bind: ct.proxy,
             script_ids: ct.script_ids,
             alzahra: ct.alzahra,

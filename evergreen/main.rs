@@ -67,7 +67,7 @@ async fn main() -> std::io::Result<()> {
 async fn shiper(
     base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>, alzahra: String,
 ) {
-    let name = alzahra[7..10].to_string();
+    let name = alzahra[8..10].to_string();
     let conf = Config::get();
     let base_fronter =
         Arc::new(fronter::Fronter::new(&alzahra, conf.script_ids.clone()));

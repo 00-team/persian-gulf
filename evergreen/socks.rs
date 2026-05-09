@@ -11,12 +11,14 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 
+use crate::config::Config;
+
 #[derive(Debug)]
 pub enum EverError {
     SocksVersionMismatch,
     SocksNoAcceptableMethod,
     SocksAuthRequired,
-    // SocksBadAuth,
+    SocksBadAuth,
     SocksInvalidConnect,
     // SocksUnsupportedAddress,
     InvalidDnsNameError,
@@ -61,7 +63,7 @@ impl SocksChannelCold {
 
     const AUTH_VERSION: u8 = 0x01;
     const AUTH_SUCCESS: u8 = 0x00;
-    // const AUTH_FAILURE: u8 = 0x01;
+    const AUTH_FAILURE: u8 = 0x01;
 
     pub async fn init(
         stream: TcpStream, index: u64,
@@ -127,22 +129,17 @@ impl SocksChannelCold {
         let mut password = [0u8; 255];
         self.s.read_exact(&mut password[..plen]).await?;
 
-        log::debug!(
-            "user: {:?} | pass: {:?}",
-            str::from_utf8(&username[..ulen]),
-            str::from_utf8(&password[..plen])
-        );
+        let user = str::from_utf8(&username[..ulen]).unwrap_or("");
+        let pass = str::from_utf8(&password[..plen]).unwrap_or("");
 
+        let conf = Config::get();
+        if !conf.users.get(user).map(|p| p == pass).unwrap_or(false) {
+            self.s.write_all(&[Self::AUTH_VERSION, Self::AUTH_FAILURE]).await?;
+            return Err(EverError::SocksBadAuth);
+        }
+
+        log::debug!("user: {user} | pass: {pass}",);
         self.s.write_all(&[Self::AUTH_VERSION, Self::AUTH_SUCCESS]).await?;
-        // TODO: handle userpass correctly
-        // if user_ok && pass_ok {
-        // } else {
-        //     client.write_all(&[AUTH_VERSION, AUTH_FAILURE])?;
-        //     return Err(io::Error::new(
-        //         ErrorKind::PermissionDenied,
-        //         "bad credentials",
-        //     ));
-        // }
 
         Ok(())
     }
