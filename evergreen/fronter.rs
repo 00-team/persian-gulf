@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use reqwest::Url;
+// use reqwest::Url;
 use rustls::{ClientConfig, pki_types::ServerName};
 use shared::tracker::{ConnectionStats, TrackedTcpStream};
 use tokio::{
@@ -276,7 +276,7 @@ impl Fronter {
 
             let Some(loc) = res.headers().get("location") else { break };
             let loc = loc.to_str().unwrap();
-            let loc = Url::parse(loc).unwrap();
+            let loc = url::Url::parse(loc).unwrap();
             let mut path = loc.path().to_string();
             if let Some(q) = loc.query() {
                 path.push('?');

@@ -19,21 +19,19 @@ impl log::Log for MasterLogger {
             return;
         }
 
-        let level = match record.level() {
-            log::Level::Trace => ["\x1b[36m", "T", "Trace"],
-            log::Level::Debug => ["\x1b[35m", "D", "Debug"],
-            log::Level::Info => ["\x1b[32m", "I", "Info"],
-            log::Level::Warn => ["\x1b[33m", "W", "Warn"],
-            log::Level::Error => ["\x1b[31m", "E", "Error"],
+        let (c, n, _) = match record.level() {
+            log::Level::Trace => ("\x1b[36m", "T", "Trace"),
+            log::Level::Debug => ("\x1b[35m", "D", "Debug"),
+            log::Level::Info => ("\x1b[32m", "I", "Info"),
+            log::Level::Warn => ("\x1b[33m", "W", "Warn"),
+            log::Level::Error => ("\x1b[31m", "E", "Error"),
         };
+        if !cfg!(target_os = "android") {
+            let _ = write!(std::io::stderr(), "{{{c}{}\x1b[0m}}", now());
+        }
         let _ = writeln!(
             std::io::stderr(),
-            "{{{}{}\x1b[0m}}[{}{}\x1b[0m]{{{}{}\x1b[32m:\x1b[93m{}\x1b[0m}}: {}",
-            level[0],
-            now(),
-            level[0],
-            level[1],
-            level[0],
+            "[{c}{n}\x1b[0m]{{{c}{}\x1b[32m:\x1b[93m{}\x1b[0m}}: {}",
             record.target(),
             record.line().unwrap_or_default(),
             record.args(),

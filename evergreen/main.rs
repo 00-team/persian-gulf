@@ -156,7 +156,7 @@ async fn shiper(
     let semaphore = Arc::new(Semaphore::new(5));
 
     'main: loop {
-        tokio::time::sleep(Duration::from_millis(3500)).await;
+        tokio::time::sleep(Duration::from_millis(conf.send_delay)).await;
         let mut tanks = HashMap::<UniqueId, SpringTank>::with_capacity(512);
 
         let running_springs = 'a: {
