@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::socks::SocksChannelCold;
 use base64::Engine;
 use shared::shipment::{BinDencode, SpringTank};
+use shared::tracker::ConnectionStats;
 use shared::{logger, shipment::Shipment, spring::Spring, uid::UniqueId};
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -21,6 +22,8 @@ async fn main() -> std::io::Result<()> {
     log::set_max_level(log::LevelFilter::Trace);
 
     let conf = Config::get();
+    let stats = ConnectionStats::default();
+    let client_stats = ConnectionStats::default();
 
     let listener = TcpListener::bind(&conf.socks_bind).await?;
     log::info!("socks on: {}", conf.socks_bind);
@@ -33,10 +36,31 @@ async fn main() -> std::io::Result<()> {
         let sps = Arc::new(Mutex::new(
             HashMap::<UniqueId, Spring>::with_capacity(200),
         ));
-        let h_shiper = tokio::task::spawn(shiper(sps.clone(), az.clone()));
+        let h_shiper =
+            tokio::task::spawn(shiper(sps.clone(), az.clone(), stats.clone()));
         az_springs.push((h_shiper, sps));
         tokio::time::sleep(Duration::from_millis(1000)).await;
     }
+
+    let cs = client_stats.clone();
+    let gs = stats.clone();
+    tokio::spawn(async move {
+        let mut n = 0;
+        loop {
+            log::debug!("client: {cs} | google: {gs}");
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            n += 1;
+
+            if n > 10 {
+                let _ = tokio::fs::write(
+                    "net-stats",
+                    format!("client: {cs} | google: {gs}"),
+                )
+                .await;
+                n = 0;
+            }
+        }
+    });
 
     // let timeout = std::time::Duration::from_secs(30);
 
@@ -46,7 +70,7 @@ async fn main() -> std::io::Result<()> {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let spring = scc.run();
+        let spring = scc.run(&client_stats);
 
         next_az += 1;
         if next_az >= az_springs.len() {
@@ -65,11 +89,12 @@ async fn main() -> std::io::Result<()> {
 
 async fn shiper(
     base_springs: Arc<Mutex<HashMap<UniqueId, Spring>>>, alzahra: String,
+    cs: ConnectionStats,
 ) {
     let name = alzahra[8..10].to_string();
     let conf = Config::get();
     let base_fronter =
-        Arc::new(fronter::Fronter::new(&alzahra, conf.script_ids.clone()));
+        Arc::new(fronter::Fronter::new(&alzahra, conf.script_ids.clone(), cs));
 
     struct State {
         ship_id: UniqueId,
@@ -324,7 +349,7 @@ async fn shiper(
                 "\x1b[33m{:<3}\x1b[m ->: {:3}/{running_springs:<3} |{data_len:7}| {name} {:.2}",
                 shipment.order,
                 shipment.tanks.len(),
-                elapsed.as_secs_f32()
+                elapsed.as_secs_f32(),
             );
 
             state.response_order = shipment.order;

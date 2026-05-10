@@ -9,6 +9,7 @@ use std::{
 
 use reqwest::Url;
 use rustls::{ClientConfig, pki_types::ServerName};
+use shared::tracker::{ConnectionStats, TrackedTcpStream};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf},
     net::TcpStream,
@@ -19,8 +20,8 @@ use tokio_rustls::{TlsConnector, client::TlsStream};
 
 use crate::{config::Config, socks::EverError};
 
-type ConnReader = ReadHalf<TlsStream<TcpStream>>;
-type ConnWriter = WriteHalf<TlsStream<TcpStream>>;
+type ConnReader = ReadHalf<TlsStream<TrackedTcpStream>>;
+type ConnWriter = WriteHalf<TlsStream<TrackedTcpStream>>;
 
 #[derive(Debug)]
 struct ActiveConnection {
@@ -40,6 +41,7 @@ struct ConnectionInfo {
 struct ConnectionPool {
     pool: Arc<Mutex<Vec<ActiveConnection>>>,
     info: ConnectionInfo,
+    stats: ConnectionStats,
 }
 
 impl ConnectionPool {
@@ -48,9 +50,10 @@ impl ConnectionPool {
     const CONN_TTL: u64 = 45;
 
     async fn open(
-        info: ConnectionInfo,
-    ) -> Result<(ConnReader, ConnWriter), EverError> {
+        info: ConnectionInfo, stats: ConnectionStats,
+    ) -> Result<ActiveConnection, EverError> {
         let tcp = TcpStream::connect((info.connect_host, 443)).await?;
+        let tcp = TrackedTcpStream::new(tcp, stats);
 
         let connector = TlsConnector::from(info.tls_config);
 
@@ -58,7 +61,8 @@ impl ConnectionPool {
         let tls_stream = connector.connect(server_name, tcp).await?;
 
         let (reader, writer) = tokio::io::split(tls_stream);
-        Ok((reader, writer))
+
+        Ok(ActiveConnection { reader, writer, created_at: Instant::now() })
     }
 
     fn fill(&self, count: usize) {
@@ -91,20 +95,19 @@ impl ConnectionPool {
     }
 
     async fn new_conn(self) {
-        let Ok(Ok((r, w))) = tokio::time::timeout(
+        let Ok(Ok(ac)) = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            Self::open(self.info.clone()),
+            Self::open(self.info.clone(), self.stats.clone()),
         )
         .await
         else {
             log::error!("new connect open failed");
             return;
         };
-        let t = Instant::now();
 
         let mut pm = self.pool.lock().await;
         if pm.len() < Self::POOL_MAX {
-            pm.push(ActiveConnection { reader: r, writer: w, created_at: t });
+            pm.push(ac);
         }
     }
 
@@ -123,9 +126,9 @@ impl ConnectionPool {
             }
         }
 
-        let Ok(Ok((r, w))) = tokio::time::timeout(
+        let Ok(Ok(ac)) = tokio::time::timeout(
             Duration::from_secs(3),
-            Self::open(self.info.clone()),
+            Self::open(self.info.clone(), self.stats.clone()),
         )
         .await
         else {
@@ -136,11 +139,7 @@ impl ConnectionPool {
         log::warn!("no open connections");
         self.fill(8);
 
-        Ok(ActiveConnection {
-            reader: r,
-            writer: w,
-            created_at: Instant::now(),
-        })
+        Ok(ac)
     }
 
     pub async fn release(&self, ac: ActiveConnection) {
@@ -165,7 +164,10 @@ pub struct Fronter {
 }
 
 impl Fronter {
-    pub fn new(alzahra: &str, script_ids: Vec<(String, String)>) -> Self {
+    pub fn new(
+        alzahra: &str, script_ids: Vec<(String, String)>,
+        stats: ConnectionStats,
+    ) -> Self {
         let conf = Config::get();
         Self {
             http_host: "script.google.com",
@@ -184,6 +186,7 @@ impl Fronter {
                     sni_host: "www.google.com",
                     tls_config: conf.tls.clone(),
                 },
+                stats,
             },
             warmed: Arc::new(AtomicBool::new(false)),
         }

@@ -1,10 +1,11 @@
 use rustls::pki_types::InvalidDnsNameError;
 use shared::shipment::BinDencode;
 use shared::spring::Spring;
+use shared::tracker::ConnectionStats;
 use shared::uid::UniqueId;
 use shared::utils::SocksHost;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpStream, UdpSocket};
@@ -202,7 +203,7 @@ impl SocksChannelCold {
         Ok(())
     }
 
-    pub fn run(self) -> Spring {
+    pub fn run(self, stats: &ConnectionStats) -> Spring {
         let ended = Arc::new(AtomicBool::new(false));
 
         let (sx_alzahra, rx_alzahra) = mpsc::channel::<Vec<u8>>(2048);
@@ -227,8 +228,18 @@ impl SocksChannelCold {
         }
 
         let (tcp_read, tcp_write) = self.s.into_split();
-        tokio::spawn(Self::read_loop(tcp_read, sx_alzahra, ended.clone()));
-        tokio::spawn(Self::write_loop(tcp_write, rx_channel, ended.clone()));
+        tokio::spawn(Self::read_loop(
+            tcp_read,
+            sx_alzahra,
+            ended.clone(),
+            stats.bytes_read.clone(),
+        ));
+        tokio::spawn(Self::write_loop(
+            tcp_write,
+            rx_channel,
+            ended.clone(),
+            stats.bytes_written.clone(),
+        ));
 
         runner
     }
@@ -293,7 +304,7 @@ impl SocksChannelCold {
 
     async fn read_loop(
         mut stream: OwnedReadHalf, sx_alzahra: mpsc::Sender<Vec<u8>>,
-        ended: Arc<AtomicBool>,
+        ended: Arc<AtomicBool>, br: Arc<AtomicU64>
     ) {
         let mut buf = vec![0u8; 65536];
 
@@ -303,6 +314,7 @@ impl SocksChannelCold {
                     break;
                 }
                 Ok(n) => {
+                    br.fetch_add(n as u64, Ordering::Relaxed);
                     if sx_alzahra.send(buf[..n].to_vec()).await.is_err() {
                         break;
                     }
@@ -319,10 +331,11 @@ impl SocksChannelCold {
 
     async fn write_loop(
         mut stream: OwnedWriteHalf, mut rx_channel: mpsc::Receiver<Vec<u8>>,
-        ended: Arc<AtomicBool>,
+        ended: Arc<AtomicBool>, bw: Arc<AtomicU64>
     ) {
         while !ended.load(Ordering::Relaxed) {
             let Some(data) = rx_channel.recv().await else { return };
+            bw.fetch_add(data.len() as u64, Ordering::Relaxed);
             if stream.write_all(&data).await.is_err() {
                 ended.store(true, Ordering::SeqCst);
             }

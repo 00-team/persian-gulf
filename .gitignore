@@ -5,3 +5,4 @@ Cargo.lock
 config.toml
 efg.example.toml
 efg.toml
+net-stats

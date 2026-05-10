@@ -80,15 +80,15 @@ pub struct Config {
     pub script_ids: Vec<(String, String)>,
     pub alzahra: Vec<String>,
     pub tls: Arc<ClientConfig>,
-    pub users: HashMap<String, String>,
+    // pub users: HashMap<String, String>,
 }
 
 impl Config {
     #![allow(clippy::inconsistent_digit_grouping)]
 
-    pub fn create_dirs() -> std::io::Result<()> {
-        Ok(())
-    }
+    // pub fn create_dirs() -> std::io::Result<()> {
+    //     Ok(())
+    // }
 
     fn init() -> Self {
         let ct = tom::get();
@@ -98,7 +98,7 @@ impl Config {
         }
 
         Self {
-            users,
+            // users,
             socks_bind: ct.proxy,
             script_ids: ct.script_ids,
             alzahra: ct.alzahra,
