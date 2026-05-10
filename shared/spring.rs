@@ -22,7 +22,7 @@ impl Spring {
     pub async fn read_data(&mut self, data: &mut Vec<u8>) -> bool {
         let mut dt = self.data.lock().await;
         let len = dt.len();
-        let max_read = len.min(5 * 1024 * 1024);
+        let max_read = len.min(15 * 1024 * 1024);
         data.extend_from_slice(&dt[..max_read]);
         dt.copy_within(max_read.., 0);
         dt.truncate(len - max_read);

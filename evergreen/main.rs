@@ -167,7 +167,7 @@ async fn shiper(
             let mut removal = Vec::with_capacity(mg.len());
             let mut data_collected_len = 0;
             for (sid, s) in mg.iter_mut() {
-                if data_collected_len >= 5 * 1024 * 1024 {
+                if data_collected_len >= 15 * 1024 * 1024 {
                     break;
                 }
 
