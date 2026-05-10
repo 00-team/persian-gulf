@@ -109,7 +109,6 @@ impl SocksChannelCold {
             return Err(EverError::SocksNoAcceptableMethod);
         }
 
-
         // TODO: for some reason when auth is required only some connections
         // work. and after some times they die
         Err(EverError::SocksAuthRequired)
@@ -208,18 +207,19 @@ impl SocksChannelCold {
 
         let (sx_alzahra, rx_alzahra) = mpsc::channel::<Vec<u8>>(2048);
         let (sx_channel, rx_channel) = mpsc::channel::<Vec<u8>>(2048);
+        let data = Arc::new(Mutex::new(Vec::new()));
 
         let runner = Spring {
             id: UniqueId::new(self.index),
             host: self.host,
             port: self.port,
             sx: sx_channel,
-            data: Arc::new(Mutex::new(Vec::new())),
+            data: data.clone(),
             ended: ended.clone(),
             user: self.user,
         };
 
-        tokio::spawn(Self::debt_collector(rx_alzahra, runner.data.clone()));
+        tokio::spawn(Self::debt_collector(rx_alzahra, data));
 
         if let Some(udp) = self.udp {
             tokio::spawn(Self::udp_loop(self.s, udp, ended.clone()));

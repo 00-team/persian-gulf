@@ -46,7 +46,6 @@ async fn main() -> std::io::Result<()> {
             Ok(v) => v,
             Err(_) => continue,
         };
-        // log::debug!("host: {:?}:{}", scc.host, scc.port);
         let spring = scc.run();
 
         next_az += 1;
@@ -130,14 +129,16 @@ async fn shiper(
 
     let mut tasks = Vec::with_capacity(10);
     let semaphore = Arc::new(Semaphore::new(5));
-    let mut skiped = 0;
 
     'main: loop {
         tokio::time::sleep(Duration::from_millis(3500)).await;
         let mut tanks = HashMap::<UniqueId, SpringTank>::with_capacity(512);
 
-        let running_springs = {
+        let running_springs = 'a: {
             let mut mg = base_springs.lock().await;
+            if mg.is_empty() {
+                break 'a 0;
+            }
             let mut removal = Vec::with_capacity(mg.len());
             let mut data_collected_len = 0;
             for (sid, s) in mg.iter_mut() {
@@ -162,12 +163,9 @@ async fn shiper(
             mg.len()
         };
 
-        if tanks.is_empty() && skiped < 3 {
-            log::debug!("skiped");
-            skiped += 1;
+        if tanks.is_empty() && running_springs == 0 {
             continue;
         }
-        skiped = 0;
 
         let qlen = { base_state.lock().await.queued_shipments.len() };
         if qlen > 7 {

@@ -43,8 +43,8 @@ struct ConnectionPool {
 }
 
 impl ConnectionPool {
-    const POOL_MAX: usize = 50;
-    const POOL_MIN_IDLE: usize = 15;
+    const POOL_MAX: usize = 30;
+    const POOL_MIN_IDLE: usize = 4;
     const CONN_TTL: u64 = 45;
 
     async fn open(
@@ -74,7 +74,7 @@ impl ConnectionPool {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
-            {
+            let cc = {
                 let mut pm = self.pool.lock().await;
                 pm.retain(|ac| {
                     if ac.created_at.elapsed().as_secs() > Self::CONN_TTL {
@@ -83,9 +83,10 @@ impl ConnectionPool {
 
                     true
                 });
-            }
+                pm.len()
+            };
 
-            self.fill(Self::POOL_MIN_IDLE);
+            self.fill(Self::POOL_MIN_IDLE.saturating_sub(cc));
         }
     }
 
@@ -128,10 +129,11 @@ impl ConnectionPool {
         )
         .await
         else {
-            log::error!("open connection failed");
+            log::error!("acquire open connection failed");
             return Err(EverError::ConnectionFailed);
         };
 
+        log::warn!("no open connections");
         self.fill(8);
 
         Ok(ActiveConnection {
