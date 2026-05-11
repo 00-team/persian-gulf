@@ -46,19 +46,22 @@ async fn main() -> std::io::Result<()> {
     let gs = stats.clone();
     tokio::spawn(async move {
         let mut n = 0;
+        let mut last_log = String::new();
         loop {
-            log::debug!("client: {cs} | google: {gs}");
             tokio::time::sleep(Duration::from_secs(3)).await;
+
+            let fmt = format!("client: {cs} | google: {gs}");
+            if fmt == last_log {
+                continue;
+            }
+            log::debug!("{fmt}");
             n += 1;
 
             if n > 10 {
-                let _ = tokio::fs::write(
-                    "net-stats",
-                    format!("client: {cs} | google: {gs}"),
-                )
-                .await;
+                let _ = tokio::fs::write("net-stats", &fmt).await;
                 n = 0;
             }
+            last_log = fmt;
         }
     });
 
