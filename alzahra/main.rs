@@ -154,7 +154,7 @@ impl Ship {
         let mut buf = vec![0u8; 65536];
 
         while !ended.load(Ordering::Relaxed) {
-            if data.lock().await.len() > 50 * 1024 * 1024 {
+            if data.lock().await.len() > 150 * 1024 * 1024 {
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 continue;
             }
